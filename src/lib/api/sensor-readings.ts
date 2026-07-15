@@ -1,4 +1,4 @@
-import { apiRequest } from './client';
+import { apiRequest, apiBlobRequest, DownloadedFile } from './client';
 import { dedupeAsync } from './dedupe';
 import {
   SensorReading,
@@ -196,31 +196,147 @@ export async function getSensorReadingsPaginated(
   });
 }
 
-/** Fetch all raw readings in a time window via cursor pagination (for table & CSV export). */
-export async function exportAllSensorReadings(
-  params: Omit<SensorReadingsParams, 'offset' | 'page' | 'page_size'>,
-  onPageFetched?: (pagesFetched: number, rowsFetched: number) => void
-): Promise<SensorReading[]> {
-  const all: SensorReading[] = [];
-  let cursor: string | null = null;
-  let pagesFetched = 0;
+export interface SensorReadingsExportParams {
+  device_id?: string;
+  device_ids?: string[];
+  location_id?: string;
+  location_ids?: string[];
+  serial_number?: string;
+  serial_numbers?: string[];
+  device_status?: string;
+  device_statuses?: string[];
+  start_date?: string;
+  end_date?: string;
+  recorded_after?: string;
+  recorded_before?: string;
+  hours?: number;
+  days?: number;
+  recorded_date?: string;
+  today?: boolean;
+  yesterday?: boolean;
+  this_week?: boolean;
+  this_month?: boolean;
+  timezone?: string;
+  pm2_5_min?: number;
+  pm2_5_max?: number;
+  pm10_min?: number;
+  pm10_max?: number;
+  temperature_min?: number;
+  temperature_max?: number;
+  humidity_min?: number;
+  humidity_max?: number;
+  voc_index_min?: number;
+  voc_index_max?: number;
+  nox_index_min?: number;
+  nox_index_max?: number;
+  has_pm2_5?: boolean;
+  has_pm10?: boolean;
+  has_temperature?: boolean;
+  has_humidity?: boolean;
+  has_voc_index?: boolean;
+  has_nox_index?: boolean;
+  has_all_readings?: boolean;
+  min_readings_count?: number;
+  order_by?: string;
+  order?: string;
+  include_device_info?: boolean;
+  include_location_info?: boolean;
+  limit?: number;
+}
 
-  do {
-    const page = await getSensorReadingsPaginated({
-      ...params,
-      paginate: 'cursor',
-      order_by: params.order_by ?? 'recorded_at',
-      order: params.order ?? 'asc',
-      limit: 1000,
-      cursor: cursor ?? undefined,
-    });
-    all.push(...page.data);
-    pagesFetched += 1;
-    onPageFetched?.(pagesFetched, all.length);
-    cursor = page.pagination.has_more ? page.pagination.next_cursor : null;
-  } while (cursor);
+function buildExportQueryParams(params?: SensorReadingsExportParams): URLSearchParams {
+  const queryParams = new URLSearchParams();
+  if (!params) {
+    queryParams.append('limit', '100000');
+    return queryParams;
+  }
 
-  return all;
+  if (params.device_id) queryParams.append('device_id', params.device_id);
+  if (params.device_ids?.length) {
+    params.device_ids.forEach((id) => queryParams.append('device_ids', id));
+  }
+  if (params.location_id) queryParams.append('location_id', params.location_id);
+  if (params.location_ids?.length) {
+    params.location_ids.forEach((id) => queryParams.append('location_ids', id));
+  }
+  if (params.serial_number) queryParams.append('serial_number', params.serial_number);
+  if (params.serial_numbers?.length) {
+    params.serial_numbers.forEach((sn) => queryParams.append('serial_numbers', sn));
+  }
+  if (params.device_status) queryParams.append('device_status', params.device_status);
+  if (params.device_statuses?.length) {
+    params.device_statuses.forEach((status) => queryParams.append('device_statuses', status));
+  }
+
+  if (params.start_date) queryParams.append('start_date', params.start_date);
+  if (params.end_date) queryParams.append('end_date', params.end_date);
+  if (params.recorded_after) queryParams.append('recorded_after', params.recorded_after);
+  if (params.recorded_before) queryParams.append('recorded_before', params.recorded_before);
+  if (params.hours !== undefined && params.hours !== null) queryParams.append('hours', params.hours.toString());
+  if (params.days !== undefined && params.days !== null) queryParams.append('days', params.days.toString());
+  if (params.recorded_date) queryParams.append('recorded_date', params.recorded_date);
+  if (params.today !== undefined && params.today !== null) queryParams.append('today', params.today.toString());
+  if (params.yesterday !== undefined && params.yesterday !== null) queryParams.append('yesterday', params.yesterday.toString());
+  if (params.this_week !== undefined && params.this_week !== null) queryParams.append('this_week', params.this_week.toString());
+  if (params.this_month !== undefined && params.this_month !== null) queryParams.append('this_month', params.this_month.toString());
+  if (params.timezone) queryParams.append('timezone', params.timezone);
+
+  if (params.pm2_5_min !== undefined && params.pm2_5_min !== null) queryParams.append('pm2_5_min', params.pm2_5_min.toString());
+  if (params.pm2_5_max !== undefined && params.pm2_5_max !== null) queryParams.append('pm2_5_max', params.pm2_5_max.toString());
+  if (params.pm10_min !== undefined && params.pm10_min !== null) queryParams.append('pm10_min', params.pm10_min.toString());
+  if (params.pm10_max !== undefined && params.pm10_max !== null) queryParams.append('pm10_max', params.pm10_max.toString());
+  if (params.temperature_min !== undefined && params.temperature_min !== null) queryParams.append('temperature_min', params.temperature_min.toString());
+  if (params.temperature_max !== undefined && params.temperature_max !== null) queryParams.append('temperature_max', params.temperature_max.toString());
+  if (params.humidity_min !== undefined && params.humidity_min !== null) queryParams.append('humidity_min', params.humidity_min.toString());
+  if (params.humidity_max !== undefined && params.humidity_max !== null) queryParams.append('humidity_max', params.humidity_max.toString());
+  if (params.voc_index_min !== undefined && params.voc_index_min !== null) queryParams.append('voc_index_min', params.voc_index_min.toString());
+  if (params.voc_index_max !== undefined && params.voc_index_max !== null) queryParams.append('voc_index_max', params.voc_index_max.toString());
+  if (params.nox_index_min !== undefined && params.nox_index_min !== null) queryParams.append('nox_index_min', params.nox_index_min.toString());
+  if (params.nox_index_max !== undefined && params.nox_index_max !== null) queryParams.append('nox_index_max', params.nox_index_max.toString());
+
+  if (params.has_pm2_5 !== undefined && params.has_pm2_5 !== null) queryParams.append('has_pm2_5', params.has_pm2_5.toString());
+  if (params.has_pm10 !== undefined && params.has_pm10 !== null) queryParams.append('has_pm10', params.has_pm10.toString());
+  if (params.has_temperature !== undefined && params.has_temperature !== null) queryParams.append('has_temperature', params.has_temperature.toString());
+  if (params.has_humidity !== undefined && params.has_humidity !== null) queryParams.append('has_humidity', params.has_humidity.toString());
+  if (params.has_voc_index !== undefined && params.has_voc_index !== null) queryParams.append('has_voc_index', params.has_voc_index.toString());
+  if (params.has_nox_index !== undefined && params.has_nox_index !== null) queryParams.append('has_nox_index', params.has_nox_index.toString());
+  if (params.has_all_readings !== undefined && params.has_all_readings !== null) queryParams.append('has_all_readings', params.has_all_readings.toString());
+  if (params.min_readings_count !== undefined && params.min_readings_count !== null) queryParams.append('min_readings_count', params.min_readings_count.toString());
+
+  if (params.order_by) queryParams.append('order_by', params.order_by);
+  if (params.order) queryParams.append('order', params.order);
+
+  if (params.include_device_info !== undefined && params.include_device_info !== null) {
+    queryParams.append('include_device_info', params.include_device_info.toString());
+  }
+  if (params.include_location_info !== undefined && params.include_location_info !== null) {
+    queryParams.append('include_location_info', params.include_location_info.toString());
+  }
+
+  const limit = params.limit !== undefined && params.limit !== null && params.limit >= 1 && params.limit <= 100_000
+    ? params.limit
+    : 100_000;
+  queryParams.append('limit', limit.toString());
+
+  return queryParams;
+}
+
+export async function exportSensorReadingsCsv(
+  params?: SensorReadingsExportParams
+): Promise<DownloadedFile> {
+  const queryParams = buildExportQueryParams(params);
+  const query = queryParams.toString();
+  const endpoint = `/sensor-readings/export/csv${query ? `?${query}` : ''}`;
+  return apiBlobRequest(endpoint, { requireAuth: true });
+}
+
+export async function exportSensorReadingsExcel(
+  params?: SensorReadingsExportParams
+): Promise<DownloadedFile> {
+  const queryParams = buildExportQueryParams(params);
+  const query = queryParams.toString();
+  const endpoint = `/sensor-readings/export/excel${query ? `?${query}` : ''}`;
+  return apiBlobRequest(endpoint, { requireAuth: true });
 }
 
 // Get sensor reading by ID (authenticated endpoint)

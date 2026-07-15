@@ -408,4 +408,160 @@ async function apiFormRequest<T>(
   }
 }
 
-export { apiRequest, apiFormRequest };
+// Downloaded file structure from blob request
+export interface DownloadedFile {
+  blob: Blob;
+  filename?: string;
+  contentType?: string;
+}
+
+function extractFilenameFromContentDisposition(header: string | null): string | undefined {
+  if (!header) return undefined;
+  let rawFilename: string | undefined;
+
+  const filenameStarMatch = header.match(/filename\*\s*=\s*(?:utf-8|UTF-8)''([^;\r\n]+)/i);
+  if (filenameStarMatch && filenameStarMatch[1]) {
+    try {
+      rawFilename = decodeURIComponent(filenameStarMatch[1]);
+    } catch {
+      // fallback to regular match
+    }
+  }
+
+  if (!rawFilename) {
+    const filenameMatch = header.match(/filename\s*=\s*(?:"([^"]+)"|([^;\r\n]+))/i);
+    if (filenameMatch) {
+      rawFilename = (filenameMatch[1] || filenameMatch[2]);
+    }
+  }
+
+  if (!rawFilename) return undefined;
+
+  // Remove null and control characters
+  let sanitized = rawFilename.replace(/[\x00-\x1F\x7F]/g, '');
+
+  // Strip directory paths (handle both / and \)
+  const parts = sanitized.split(/[/\\]/);
+  sanitized = parts[parts.length - 1] || '';
+
+  // Trim whitespace
+  sanitized = sanitized.trim();
+
+  // Reject empty filenames, "." and ".."
+  if (!sanitized || sanitized === '.' || sanitized === '..') {
+    return undefined;
+  }
+
+  return sanitized;
+}
+
+async function apiBlobRequest(
+  endpoint: string,
+  options: RequestInit & { requireAuth?: boolean; _retryCount?: number; _refreshAttempted?: boolean } = {}
+): Promise<DownloadedFile> {
+  const { requireAuth = true, _retryCount = 0, _refreshAttempted = false, ...fetchOptions } = options;
+
+  const headers: Record<string, string> = {
+    ...(fetchOptions.headers as Record<string, string> || {}),
+  };
+
+  const url = buildProxyUrl(endpoint);
+
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      headers,
+    });
+
+    if (!response.ok) {
+      if (
+        response.status === 401 &&
+        !_refreshAttempted &&
+        !isAuthBypassEndpoint(endpoint)
+      ) {
+        const refreshed = await tryRefreshSession();
+        if (refreshed) {
+          return apiBlobRequest(endpoint, { ...options, _refreshAttempted: true });
+        }
+        if (requireAuth) {
+          handleSessionExpired();
+          throw new ApiException(401, 'Unauthorized. Please login again.');
+        }
+      }
+
+      const responseText = await response.text();
+      let errorDetail = `HTTP ${response.status}: ${response.statusText}`;
+      let validationErrors: ValidationError[] | undefined;
+
+      if (responseText && responseText.trim()) {
+        try {
+          const errorData: ErrorResponse = JSON.parse(responseText);
+          errorDetail = formatErrorDetail(
+            errorData.detail,
+            errorData.message || (typeof errorData.error === 'string' ? errorData.error : '') || errorDetail
+          );
+          if (errorData.errors && Array.isArray(errorData.errors)) {
+            validationErrors = errorData.errors;
+          }
+          if (response.status === 401) {
+            if (requireAuth) {
+              handleSessionExpired();
+              throw new ApiException(401, 'Unauthorized. Please login again.');
+            }
+            throw new ApiException(401, errorDetail, errorData, validationErrors);
+          }
+          throw new ApiException(response.status, errorDetail, errorData, validationErrors);
+        } catch (parseOrThrow) {
+          if (parseOrThrow instanceof ApiException) {
+            throw parseOrThrow;
+          }
+          errorDetail = responseText;
+        }
+      }
+
+      if (response.status === 401 && requireAuth) {
+        handleSessionExpired();
+        throw new ApiException(401, 'Unauthorized. Please login again.');
+      }
+
+      throw new ApiException(response.status, errorDetail, undefined, validationErrors);
+    }
+
+    const blob = await response.blob();
+    const filename = extractFilenameFromContentDisposition(
+      response.headers.get('content-disposition') || response.headers.get('Content-Disposition')
+    );
+    const contentType =
+      response.headers.get("Content-Type") ??
+      blob.type ??
+      undefined;
+    return { blob, filename, contentType };
+  } catch (error) {
+    if (error instanceof ApiException) {
+      throw error;
+    }
+
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      throw new ApiException(
+        0,
+        'Network error: unable to reach the server. Please check your connection and try again.',
+        error
+      );
+    }
+
+    if (error instanceof Error) {
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        throw new ApiException(
+          0,
+          'Network error: unable to reach the server. Please check your connection and try again.',
+          error
+        );
+      }
+      throw new ApiException(0, error.message, error);
+    }
+
+    throw new ApiException(0, 'Unknown network error occurred', error);
+  }
+}
+
+export { apiRequest, apiFormRequest, apiBlobRequest };

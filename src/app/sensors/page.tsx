@@ -14,14 +14,18 @@ import { Location, SensorDevice, SensorReading } from "@/lib/api/types";
 import { extractReadingValue, extractReadingValueOrNull, extractTimestamp, calculateAQI, getAQIStatus } from "@/lib/utils/readings";
 import {
   fetchChartSeries,
-  fetchRawReadingsForExport,
   filtersToRawParams,
   formatSeriesMetaLabel,
   latestMetricsFromBuckets,
   groupSeriesByDevice,
   seriesReadingsByDevice,
 } from "@/lib/utils/sensor-series";
-import { getSensorReadingsPaginated } from "@/lib/api/sensor-readings";
+import {
+  getSensorReadingsPaginated,
+  exportSensorReadingsCsv,
+  exportSensorReadingsExcel,
+  SensorReadingsExportParams,
+} from "@/lib/api/sensor-readings";
 import {
   ChartTimeRange,
   chartWindowTitle,
@@ -109,9 +113,6 @@ function dotPropsFor(chartType: ChartType, dataLength: number): { dot?: false } 
 // Rows fetched per table page (server-side cursor pagination)
 const TABLE_PAGE_SIZE = 100;
 
-// CSV blob parts are built in chunks of this many rows instead of one giant string
-const CSV_CHUNK_ROWS = 5000;
-
 // Cached formatter — per-row Date#toLocaleString re-resolves the locale every call
 const LOCAL_TIMESTAMP_FORMAT = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
@@ -167,7 +168,9 @@ function SensorsContent() {
   // CSV download dialog state
   const [csvDialogOpen, setCsvDialogOpen] = useState(false);
   const [selectedStationsForExport, setSelectedStationsForExport] = useState<Set<string>>(new Set());
-  const [exportFormat, setExportFormat] = useState<"single" | "multiple">("single");
+  const [exportFormat, setExportFormat] = useState<"csv" | "excel">("csv");
+  const [includeDeviceInfo, setIncludeDeviceInfo] = useState(false);
+  const [includeLocationInfo, setIncludeLocationInfo] = useState(false);
   // Initialize with empty array - will be set based on URL or default to first station
   const [selectedStationIds, setSelectedStationIds] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
@@ -182,8 +185,6 @@ function SensorsContent() {
   const [tablePrevCursors, setTablePrevCursors] = useState<string[]>([]);
   const [tableNextCursor, setTableNextCursor] = useState<string | null>(null);
   const [csvExportLoading, setCsvExportLoading] = useState(false);
-  // Pages fetched so far during a CSV export (simple progress indicator)
-  const [csvExportPages, setCsvExportPages] = useState(0);
   const [exportRange, setExportRange] = useState<"current" | "custom">("current");
   const [exportStartDate, setExportStartDate] = useState("");
   const [exportEndDate, setExportEndDate] = useState("");
@@ -973,172 +974,6 @@ function SensorsContent() {
     }
   };
 
-  // Helper function to escape CSV values
-  const escapeCSV = (value: any): string => {
-    if (value === null || value === undefined) return "";
-    const stringValue = String(value);
-    // If value contains comma, quote, or newline, wrap in quotes and escape quotes
-    if (stringValue.includes(",") || stringValue.includes('"') || stringValue.includes("\n")) {
-      return `"${stringValue.replace(/"/g, '""')}"`;
-    }
-    return stringValue;
-  };
-
-  // Generate CSV content for selected stations (uses raw readings when provided).
-  // Returns chunked string parts for `new Blob(parts)` — avoids one giant join.
-  const generateCSVContent = (
-    stations: StationData[],
-    readingsByDevice?: Record<string, SensorReading[]>
-  ): string[] => {
-    const csvRows: string[] = [];
-    const exportDate = new Date().toISOString();
-    
-    // Metadata section
-    csvRows.push("Air Quality Monitor - Sensor Data Export");
-    csvRows.push(`Export Date,${exportDate}`);
-    csvRows.push(`Stations Included,${stations.map(s => s.name).join("; ")}`);
-    csvRows.push(`Total Stations,${stations.length}`);
-    csvRows.push("");
-    
-    // Summary section - Latest readings per station
-    csvRows.push("=== SUMMARY - Latest Readings ===");
-    csvRows.push("Station,Device ID,Location ID,PM1.0 (µg/m³),PM2.5 (µg/m³),PM4.0 (µg/m³),PM10.0 (µg/m³),NC0.5 (#/cm³),NC1.0 (#/cm³),NC2.5 (#/cm³),NC4.0 (#/cm³),NC10.0 (#/cm³),Typical Particle Size (µm),Temperature (°C),Humidity (%),VOC Index,NOx Index,AQI,Status");
-    stations.forEach((station) => {
-      // PM1.0 / PM4.0 / NC* / typical particle size aren't shown on the summary
-      // cards, so pull them from the station's latest raw reading for the export.
-      const stationReadings = readingsByDevice?.[station.deviceId] ?? readingsForStation(station);
-      const latestReading = stationReadings.length > 0
-        ? stationReadings.reduce((a, b) => (extractTimestamp(a) >= extractTimestamp(b) ? a : b))
-        : undefined;
-      const pm1 = latestReading ? extractReadingValueOrNull(latestReading, ['pm1_0', 'PM1.0', 'PM1_0']) : null;
-      const pm4 = latestReading ? extractReadingValueOrNull(latestReading, ['pm4_0', 'PM4.0', 'PM4_0']) : null;
-      const nc0_5 = latestReading ? extractReadingValueOrNull(latestReading, ['nc0_5', 'NC0.5', 'NC0_5']) : null;
-      const nc1_0 = latestReading ? extractReadingValueOrNull(latestReading, ['nc1_0', 'NC1.0', 'NC1_0']) : null;
-      const nc2_5 = latestReading ? extractReadingValueOrNull(latestReading, ['nc2_5', 'NC2.5', 'NC2_5']) : null;
-      const nc4_0 = latestReading ? extractReadingValueOrNull(latestReading, ['nc4_0', 'NC4.0', 'NC4_0']) : null;
-      const nc10_0 = latestReading ? extractReadingValueOrNull(latestReading, ['nc10_0', 'NC10.0', 'NC10_0']) : null;
-      const tps = latestReading ? extractReadingValueOrNull(latestReading, ['typical_particle_size', 'typical_particle_size_um', 'tps']) : null;
-      csvRows.push([
-        escapeCSV(station.name),
-        escapeCSV(station.deviceId),
-        escapeCSV(station.locationId),
-        escapeCSV(pm1?.toFixed(2)),
-        escapeCSV(station.pm2_5.toFixed(2)),
-        escapeCSV(pm4?.toFixed(2)),
-        escapeCSV(station.pm10_0.toFixed(2)),
-        escapeCSV(nc0_5?.toFixed(2)),
-        escapeCSV(nc1_0?.toFixed(2)),
-        escapeCSV(nc2_5?.toFixed(2)),
-        escapeCSV(nc4_0?.toFixed(2)),
-        escapeCSV(nc10_0?.toFixed(2)),
-        escapeCSV(tps?.toFixed(2)),
-        escapeCSV(station.temperature.toFixed(2)),
-        escapeCSV(station.humidity.toFixed(2)),
-        escapeCSV(station.voc),
-        escapeCSV(station.nox),
-        escapeCSV(station.aqi),
-        escapeCSV(station.status)
-      ].join(","));
-    });
-    csvRows.push("");
-    
-    // Detailed time series data - All readings with full timestamps
-    csvRows.push("=== DETAILED TIME SERIES DATA ===");
-    csvRows.push("Timestamp (ISO),Timestamp (Local),Station,Device ID,PM1.0 (µg/m³),PM2.5 (µg/m³),PM4.0 (µg/m³),PM10.0 (µg/m³),NC0.5 (#/cm³),NC1.0 (#/cm³),NC2.5 (#/cm³),NC4.0 (#/cm³),NC10.0 (#/cm³),Typical Particle Size (µm),Temperature (°C),Humidity (%),VOC Index,NOx Index,AQI");
-    
-    // Collect all readings from all stations with timestamps
-    const allReadingsWithMetadata: Array<{
-      timestamp: number;
-      timestampISO: string;
-      timestampLocal: string;
-      station: StationData;
-      reading: SensorReading;
-    }> = [];
-    
-    stations.forEach((station) => {
-      const stationReadings = readingsByDevice?.[station.deviceId] ?? readingsForStation(station);
-      stationReadings.forEach((reading) => {
-        const timestamp = extractTimestamp(reading);
-        const date = new Date(timestamp);
-        allReadingsWithMetadata.push({
-          timestamp,
-          timestampISO: date.toISOString(),
-          timestampLocal: LOCAL_TIMESTAMP_FORMAT.format(date),
-          station,
-          reading,
-        });
-      });
-    });
-
-    // Sort by timestamp (oldest first)
-    allReadingsWithMetadata.sort((a, b) => a.timestamp - b.timestamp);
-
-    // Write each reading as a row (missing values export as empty cells, not fake zeros)
-    allReadingsWithMetadata.forEach(({ timestampISO, timestampLocal, station, reading }) => {
-      const pm1 = extractReadingValueOrNull(reading, ['pm1_0', 'PM1.0', 'PM1_0']);
-      const pm25 = extractReadingValueOrNull(reading, ['pm2_5', 'PM2.5', 'PM2_5']);
-      const pm4 = extractReadingValueOrNull(reading, ['pm4_0', 'PM4.0', 'PM4_0']);
-      const pm10 = extractReadingValueOrNull(reading, ['pm10', 'PM10', 'pm10_0', 'PM10_0']);
-      const nc0_5 = extractReadingValueOrNull(reading, ['nc0_5', 'NC0.5', 'NC0_5']);
-      const nc1_0 = extractReadingValueOrNull(reading, ['nc1_0', 'NC1.0', 'NC1_0']);
-      const nc2_5 = extractReadingValueOrNull(reading, ['nc2_5', 'NC2.5', 'NC2_5']);
-      const nc4_0 = extractReadingValueOrNull(reading, ['nc4_0', 'NC4.0', 'NC4_0']);
-      const nc10_0 = extractReadingValueOrNull(reading, ['nc10_0', 'NC10.0', 'NC10_0']);
-      const tps = extractReadingValueOrNull(reading, ['typical_particle_size', 'typical_particle_size_um', 'tps']);
-      const temperature = extractReadingValueOrNull(reading, ['temperature', 'Temperature', 'temp']);
-      const humidity = extractReadingValueOrNull(reading, ['humidity', 'Humidity']);
-      const voc = extractReadingValueOrNull(reading, ['voc_index', 'VOC', 'voc']);
-      const nox = extractReadingValueOrNull(reading, ['nox_index', 'NOx', 'nox', 'NO2']);
-      const aqi =
-        pm25 !== null || pm10 !== null ? calculateAQI(pm25 ?? NaN, pm10 ?? NaN) : null;
-
-      csvRows.push([
-        escapeCSV(timestampISO),
-        escapeCSV(timestampLocal),
-        escapeCSV(station.name),
-        escapeCSV(station.deviceId),
-        escapeCSV(pm1?.toFixed(2)),
-        escapeCSV(pm25?.toFixed(2)),
-        escapeCSV(pm4?.toFixed(2)),
-        escapeCSV(pm10?.toFixed(2)),
-        escapeCSV(nc0_5?.toFixed(2)),
-        escapeCSV(nc1_0?.toFixed(2)),
-        escapeCSV(nc2_5?.toFixed(2)),
-        escapeCSV(nc4_0?.toFixed(2)),
-        escapeCSV(nc10_0?.toFixed(2)),
-        escapeCSV(tps?.toFixed(2)),
-        escapeCSV(temperature?.toFixed(2)),
-        escapeCSV(humidity?.toFixed(2)),
-        escapeCSV(voc),
-        escapeCSV(nox),
-        escapeCSV(aqi)
-      ].join(","));
-    });
-
-    // Chunk rows into Blob parts — the Blob constructor accepts string parts,
-    // so we never materialize the whole file as one string.
-    const parts: string[] = [];
-    for (let i = 0; i < csvRows.length; i += CSV_CHUNK_ROWS) {
-      const chunk = csvRows.slice(i, i + CSV_CHUNK_ROWS).join("\n");
-      parts.push(i === 0 ? chunk : `\n${chunk}`);
-    }
-    return parts;
-  };
-
-  // Download CSV file (content passed as Blob parts, not one monolithic string)
-  const downloadCSVFile = (parts: string[], filename: string) => {
-    const blob = new Blob(parts, { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", filename);
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   // datetime-local inputs want "YYYY-MM-DDTHH:mm" in local time
   const toLocalInputValue = (d: Date) => {
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -1162,8 +997,8 @@ function SensorsContent() {
       !exportEndDate ||
       new Date(exportStartDate) >= new Date(exportEndDate));
 
-  // Handle CSV download with selected stations and format (cursor-paginated raw export).
-  const handleCSVDownload = async () => {
+  // Handle file download with selected stations and format using backend export endpoints.
+  const handleExportDownload = async () => {
     const selectedStations = displayStations.filter(s => selectedStationsForExport.has(s.id));
 
     if (selectedStations.length === 0) {
@@ -1171,7 +1006,7 @@ function SensorsContent() {
       return;
     }
 
-    let exportFilters = seriesFiltersForRange(chartTimeRange);
+    let exportFilters: SensorReadingsExportParams = seriesFiltersForRange(chartTimeRange);
     if (exportRange === "custom") {
       if (!exportStartDate || !exportEndDate) {
         alert("Please pick both a start and an end date.");
@@ -1190,37 +1025,33 @@ function SensorsContent() {
       };
     }
 
-    setCsvExportLoading(true);
-    setCsvExportPages(0);
-    try {
-      const deviceIds = selectedStations.map((s) => s.deviceId);
-      const allReadings = await fetchRawReadingsForExport(
-        exportFilters,
-        deviceIds,
-        (pagesFetched) => setCsvExportPages(pagesFetched)
-      );
-      const readingsByDevice: Record<string, SensorReading[]> = {};
-      for (const reading of allReadings) {
-        const did = reading.device_id;
-        if (!readingsByDevice[did]) readingsByDevice[did] = [];
-        readingsByDevice[did].push(reading);
-      }
+    const exportParams: SensorReadingsExportParams = {
+      ...exportFilters,
+      device_ids: selectedStations.map(s => s.deviceId),
+      include_device_info: includeDeviceInfo,
+      include_location_info: includeLocationInfo,
+    };
 
-      if (exportFormat === "single") {
-        const csvContent = generateCSVContent(selectedStations, readingsByDevice);
-        const filename = selectedStations.length === 1
-          ? `sensor-data-${selectedStations[0].name.replace(/\s+/g, "-")}-${new Date().toISOString().split("T")[0]}.csv`
-          : `sensor-data-${selectedStations.length}-stations-${new Date().toISOString().split("T")[0]}.csv`;
-        downloadCSVFile(csvContent, filename);
+    setCsvExportLoading(true);
+    try {
+      const downloadedFile = exportFormat === "csv"
+        ? await exportSensorReadingsCsv(exportParams)
+        : await exportSensorReadingsExcel(exportParams);
+
+      const url = URL.createObjectURL(downloadedFile.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      if (downloadedFile.filename) {
+        link.download = downloadedFile.filename;
       } else {
-        selectedStations.forEach((station, index) => {
-          const csvContent = generateCSVContent([station], readingsByDevice);
-          const filename = `sensor-data-${station.name.replace(/\s+/g, "-")}-${new Date().toISOString().split("T")[0]}.csv`;
-          setTimeout(() => {
-            downloadCSVFile(csvContent, filename);
-          }, index * 200);
-        });
+        const ext = exportFormat === "csv" ? "csv" : "xlsx";
+        link.download = `sensor-readings-${new Date().toISOString().split("T")[0]}.${ext}`;
       }
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
 
       setCsvDialogOpen(false);
     } catch (err: unknown) {
@@ -1634,7 +1465,7 @@ function SensorsContent() {
               className="bg-[#016FC4] hover:bg-[#015a9e] text-white"
             >
               <Download className="h-4 w-4 mr-2" />
-              Download CSV
+              Export Data
             </Button>
           </div>
 
@@ -2289,7 +2120,7 @@ function SensorsContent() {
       <Dialog open={csvDialogOpen} onOpenChange={setCsvDialogOpen}>
         <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
-            <DialogTitle>Export Sensor Data to CSV</DialogTitle>
+            <DialogTitle>Export Sensor Data</DialogTitle>
             <DialogDescription>
               Select the stations, date range, and format for the export.
             </DialogDescription>
@@ -2441,37 +2272,74 @@ function SensorsContent() {
                 <div className="flex items-center space-x-2">
                   <input
                     type="radio"
-                    id="format-single"
+                    id="format-csv"
                     name="export-format"
-                    value="single"
-                    checked={exportFormat === "single"}
-                    onChange={(e) => setExportFormat("single")}
+                    value="csv"
+                    checked={exportFormat === "csv"}
+                    onChange={() => setExportFormat("csv")}
                     className="h-4 w-4 border-gray-300 text-[#016FC4] focus:ring-[#016FC4]"
                   />
                   <label
-                    htmlFor="format-single"
+                    htmlFor="format-csv"
                     className="text-sm font-medium leading-none cursor-pointer flex items-center gap-2"
                   >
                     <FileSpreadsheet className="h-4 w-4" />
-                    Single CSV file (all selected stations)
+                    CSV (Comma Separated Values)
                   </label>
                 </div>
                 <div className="flex items-center space-x-2">
                   <input
                     type="radio"
-                    id="format-multiple"
+                    id="format-excel"
                     name="export-format"
-                    value="multiple"
-                    checked={exportFormat === "multiple"}
-                    onChange={(e) => setExportFormat("multiple")}
+                    value="excel"
+                    checked={exportFormat === "excel"}
+                    onChange={() => setExportFormat("excel")}
                     className="h-4 w-4 border-gray-300 text-[#016FC4] focus:ring-[#016FC4]"
                   />
                   <label
-                    htmlFor="format-multiple"
+                    htmlFor="format-excel"
                     className="text-sm font-medium leading-none cursor-pointer flex items-center gap-2"
                   >
                     <FileSpreadsheet className="h-4 w-4" />
-                    Multiple CSV files (one file per station)
+                    Excel Spreadsheet (.xlsx)
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Additional Information Options */}
+            <div className="space-y-2">
+              <Label className="text-base font-semibold">Include Metadata Columns</Label>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="include-device-info"
+                    checked={includeDeviceInfo}
+                    onChange={(e) => setIncludeDeviceInfo(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-[#016FC4] focus:ring-[#016FC4]"
+                  />
+                  <label
+                    htmlFor="include-device-info"
+                    className="text-sm font-medium leading-none cursor-pointer"
+                  >
+                    Include Device Info (serial number, status, etc.)
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="include-location-info"
+                    checked={includeLocationInfo}
+                    onChange={(e) => setIncludeLocationInfo(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-[#016FC4] focus:ring-[#016FC4]"
+                  />
+                  <label
+                    htmlFor="include-location-info"
+                    className="text-sm font-medium leading-none cursor-pointer"
+                  >
+                    Include Location Info (coordinates, address, etc.)
                   </label>
                 </div>
               </div>
@@ -2486,16 +2354,14 @@ function SensorsContent() {
               Cancel
             </Button>
             <Button
-              onClick={handleCSVDownload}
+              onClick={handleExportDownload}
               className="bg-[#016FC4] hover:bg-[#015a9e] text-white"
               disabled={selectedStationsForExport.size === 0 || csvExportLoading || customExportRangeInvalid}
             >
               <Download className="h-4 w-4 mr-2" />
               {csvExportLoading
-                ? csvExportPages > 0
-                  ? `Fetched ${csvExportPages} page${csvExportPages === 1 ? "" : "s"}…`
-                  : "Exporting…"
-                : "Export CSV"}
+                ? "Exporting…"
+                : `Export ${exportFormat === "csv" ? "CSV" : "Excel"}`}
             </Button>
           </DialogFooter>
         </DialogContent>

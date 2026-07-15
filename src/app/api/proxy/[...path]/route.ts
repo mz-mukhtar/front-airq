@@ -138,6 +138,10 @@ async function handleRequest(
     if (upstreamContentType) {
       responseHeaders["Content-Type"] = upstreamContentType;
     }
+    const upstreamContentDisposition = response.headers.get("content-disposition");
+    if (upstreamContentDisposition) {
+      responseHeaders["Content-Disposition"] = upstreamContentDisposition;
+    }
     const retryAfter = response.headers.get("Retry-After");
     if (response.status === 429 && retryAfter) {
       responseHeaders["Retry-After"] = retryAfter;

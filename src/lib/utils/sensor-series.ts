@@ -1,4 +1,4 @@
-import { exportAllSensorReadings, getSensorReadingsSeries } from "@/lib/api/sensor-readings";
+import { getSensorReadingsSeries } from "@/lib/api/sensor-readings";
 import {
   SensorReading,
   SensorReadingsParams,
@@ -306,18 +306,6 @@ export function seriesReadingsByDevice(
   }
 
   return result;
-}
-
-/** Fetch all raw readings for CSV export. Never cached — exports must hit the API fresh. */
-export async function fetchRawReadingsForExport(
-  filters: SensorReadingsParams,
-  deviceIds: string[],
-  onPageFetched?: (pagesFetched: number, rowsFetched: number) => void
-): Promise<SensorReading[]> {
-  if (deviceIds.length === 0 && !filters.location_id) return [];
-
-  const params = filtersToRawParams(filters, deviceIds);
-  return exportAllSensorReadings(params, onPageFetched);
 }
 
 export type { SeriesMeta, SeriesResponse };
