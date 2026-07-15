@@ -33,6 +33,25 @@ export interface PublicReadingKPI {
   recorded_at: string;
 }
 
+export type DeviceApprovalStatus = 'pending' | 'approved' | 'rejected';
+export type DeviceApprovalDecision = 'approved' | 'rejected';
+
+export interface DeviceApprovalRequest {
+  approval_status: DeviceApprovalDecision;
+}
+
+export interface BulkDeviceUpdateItem {
+  device_id: string;
+  serial_number?: string;
+  location_id?: string;
+  owner_id?: string;
+  approval_status?: DeviceApprovalStatus;
+  approved_by?: string;
+  who_deployed_it?: 'source' | 'custom';
+  status?: 'active' | 'offline' | 'maintenance';
+  metadata_json?: Record<string, unknown>;
+}
+
 export interface SensorDevice {
   id: string;
   location_id: string;
@@ -40,7 +59,7 @@ export interface SensorDevice {
   serial_number: string;
   status: 'active' | 'offline' | 'maintenance';
   /** Admin-only: omitted in the public (anonymous/non-admin) projection. */
-  approval_status?: 'pending' | 'approved' | 'rejected';
+  approval_status?: DeviceApprovalStatus;
   /** Masked metadata: last 4 chars of the current device API key. */
   api_key_last4?: string | null;
   owner_id?: string | null;

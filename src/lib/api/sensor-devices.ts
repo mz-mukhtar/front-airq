@@ -6,6 +6,8 @@ import {
   CreateSensorDeviceRequest,
   UpdateSensorDeviceRequest,
   SensorDevicesParams,
+  DeviceApprovalDecision,
+  BulkDeviceUpdateItem,
 } from './types';
 
 // Get all sensor devices (backend requires authentication; requireAuth:false
@@ -76,5 +78,26 @@ export async function regenerateDeviceApiKey(deviceId: string): Promise<ApiKeyRe
     `/sensor-devices/${deviceId}/regenerate-api-key`,
     { method: 'POST' }
   );
+}
+
+// Approve or reject a sensor device (Admin only)
+export async function updateDeviceApproval(
+  deviceId: string,
+  approvalStatus: DeviceApprovalDecision
+): Promise<SensorDevice> {
+  return apiRequest<SensorDevice>(`/sensor-devices/${deviceId}/approve`, {
+    method: 'PATCH',
+    body: JSON.stringify({ approval_status: approvalStatus }),
+  });
+}
+
+// Bulk update sensor devices (Admin only)
+export async function bulkUpdateSensorDevices(
+  updates: BulkDeviceUpdateItem[]
+): Promise<SensorDevice[]> {
+  return apiRequest<SensorDevice[]>('/sensor-devices/', {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
 }
 

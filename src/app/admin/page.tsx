@@ -66,6 +66,8 @@ import {
   updateSensorDevice,
   deleteSensorDevice,
   regenerateDeviceApiKey,
+  updateDeviceApproval,
+  bulkUpdateSensorDevices,
 } from "@/lib/api/sensor-devices";
 import {
   User,
@@ -78,6 +80,7 @@ import {
   LocationDeleteConflictDetail,
   CreateSensorDeviceRequest,
   UpdateSensorDeviceRequest,
+  BulkDeviceUpdateItem,
 } from "@/lib/api/types";
 
 type TabType = "users" | "locations" | "devices";
@@ -137,11 +140,18 @@ export default function AdminDashboard() {
     status: "active",
     metadata_json: {},
   });
+  const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set());
+  const [bulkStatusDialogOpen, setBulkStatusDialogOpen] = useState(false);
+  const [bulkStatusValue, setBulkStatusValue] = useState<"active" | "offline" | "maintenance">("active");
+  const [bulkLocationDialogOpen, setBulkLocationDialogOpen] = useState(false);
+  const [bulkLocationId, setBulkLocationId] = useState<string>("");
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const refreshUser = useAuthStore((state) => state.refreshUser);
   const router = useRouter();
 
   useEffect(() => {
+    setSelectedDevices(new Set());
     fetchData();
   }, [activeTab]);
 
@@ -162,6 +172,7 @@ export default function AdminDashboard() {
         ]);
         setDevices(devicesData);
         setLocations(locationsData);
+        setSelectedDevices(new Set());
       }
     } catch (err: any) {
       setError(err.message || "Failed to fetch data");
@@ -461,6 +472,107 @@ export default function AdminDashboard() {
       status: "active",
       metadata_json: {},
     });
+  };
+
+  // Device approval and bulk action handlers
+  const handleApproveDevice = async (deviceId: string) => {
+    setError(null);
+    try {
+      await updateDeviceApproval(deviceId, "approved");
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Failed to approve device");
+    }
+  };
+
+  const handleRejectDevice = async (deviceId: string) => {
+    if (!confirm("Are you sure you want to reject this device?")) return;
+    setError(null);
+    try {
+      await updateDeviceApproval(deviceId, "rejected");
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Failed to reject device");
+    }
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedDevices.size === 0) return;
+    setBulkLoading(true);
+    setError(null);
+    try {
+      const updates: BulkDeviceUpdateItem[] = Array.from(selectedDevices).map((id) => ({
+        device_id: id,
+        approval_status: "approved",
+      }));
+      await bulkUpdateSensorDevices(updates);
+      setSelectedDevices(new Set());
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Bulk approval failed");
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const handleBulkReject = async () => {
+    if (selectedDevices.size === 0) return;
+    if (!confirm(`Are you sure you want to reject ${selectedDevices.size} device(s)?`)) return;
+    setBulkLoading(true);
+    setError(null);
+    try {
+      const updates: BulkDeviceUpdateItem[] = Array.from(selectedDevices).map((id) => ({
+        device_id: id,
+        approval_status: "rejected",
+      }));
+      await bulkUpdateSensorDevices(updates);
+      setSelectedDevices(new Set());
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Bulk rejection failed");
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const handleBulkStatusUpdate = async () => {
+    if (selectedDevices.size === 0) return;
+    setBulkLoading(true);
+    setError(null);
+    try {
+      const updates: BulkDeviceUpdateItem[] = Array.from(selectedDevices).map((id) => ({
+        device_id: id,
+        status: bulkStatusValue,
+      }));
+      await bulkUpdateSensorDevices(updates);
+      setSelectedDevices(new Set());
+      setBulkStatusDialogOpen(false);
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Bulk status update failed");
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const handleBulkLocationUpdate = async () => {
+    if (selectedDevices.size === 0 || !bulkLocationId) return;
+    setBulkLoading(true);
+    setError(null);
+    try {
+      const updates: BulkDeviceUpdateItem[] = Array.from(selectedDevices).map((id) => ({
+        device_id: id,
+        location_id: bulkLocationId,
+      }));
+      await bulkUpdateSensorDevices(updates);
+      setSelectedDevices(new Set());
+      setBulkLocationDialogOpen(false);
+      await fetchData();
+    } catch (err: any) {
+      setError(err.message || "Bulk location update failed");
+    } finally {
+      setBulkLoading(false);
+    }
   };
 
   return (
@@ -1014,14 +1126,89 @@ export default function AdminDashboard() {
                           </Dialog>
                         </div>
                       </CardHeader>
+                      {selectedDevices.size > 0 && (
+                        <div className="mx-6 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3 shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                              {selectedDevices.size}
+                            </span>
+                            <span className="text-sm font-medium text-foreground">
+                              device{selectedDevices.size === 1 ? "" : "s"} selected
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setSelectedDevices(new Set())}
+                              className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              Clear selection
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleBulkApprove}
+                              disabled={bulkLoading}
+                              className="h-8 border-green-200 bg-green-50/50 text-green-700 hover:bg-green-100 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
+                            >
+                              <Check className="mr-1.5 h-3.5 w-3.5" />
+                              Bulk Approve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleBulkReject}
+                              disabled={bulkLoading}
+                              className="h-8 border-red-200 bg-red-50/50 text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300"
+                            >
+                              <X className="mr-1.5 h-3.5 w-3.5" />
+                              Bulk Reject
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setBulkStatusDialogOpen(true)}
+                              disabled={bulkLoading}
+                              className="h-8"
+                            >
+                              Update Status
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setBulkLocationDialogOpen(true)}
+                              disabled={bulkLoading}
+                              className="h-8"
+                            >
+                              Update Location
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                       <CardContent>
                         <Table>
                           <TableHeader>
                             <TableRow>
+                              <TableHead className="w-12">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-gray-300"
+                                  checked={devices.length > 0 && selectedDevices.size === devices.length}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedDevices(new Set(devices.map((d) => d.id)));
+                                    } else {
+                                      setSelectedDevices(new Set());
+                                    }
+                                  }}
+                                />
+                              </TableHead>
                               <TableHead>Serial Number</TableHead>
                               <TableHead>Location</TableHead>
                               <TableHead>Deployment</TableHead>
                               <TableHead>Status</TableHead>
+                              <TableHead>Approval</TableHead>
                               <TableHead>Installed</TableHead>
                               <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -1029,7 +1216,7 @@ export default function AdminDashboard() {
                           <TableBody>
                             {devices.length === 0 ? (
                               <TableRow>
-                                <TableCell colSpan={6} className="text-center py-8">
+                                <TableCell colSpan={8} className="text-center py-8">
                                   No devices found
                                 </TableCell>
                               </TableRow>
@@ -1039,7 +1226,23 @@ export default function AdminDashboard() {
                                   (loc) => loc.id === device.location_id
                                 );
                                 return (
-                                  <TableRow key={device.id}>
+                                  <TableRow key={device.id} className={selectedDevices.has(device.id) ? "bg-muted/50" : ""}>
+                                    <TableCell className="w-12">
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 rounded border-gray-300"
+                                        checked={selectedDevices.has(device.id)}
+                                        onChange={(e) => {
+                                          const next = new Set(selectedDevices);
+                                          if (e.target.checked) {
+                                            next.add(device.id);
+                                          } else {
+                                            next.delete(device.id);
+                                          }
+                                          setSelectedDevices(next);
+                                        }}
+                                      />
+                                    </TableCell>
                                     <TableCell className="font-medium">
                                       {device.serial_number}
                                     </TableCell>
@@ -1061,18 +1264,78 @@ export default function AdminDashboard() {
                                       </span>
                                     </TableCell>
                                     <TableCell>
+                                      <span
+                                        className={`px-2 py-1 rounded text-xs font-medium ${
+                                          (device.approval_status || "approved") === "approved"
+                                            ? "bg-green-100 text-green-800"
+                                            : device.approval_status === "pending"
+                                            ? "bg-yellow-100 text-yellow-800"
+                                            : "bg-red-100 text-red-800"
+                                        }`}
+                                      >
+                                        {device.approval_status || "approved"}
+                                      </span>
+                                    </TableCell>
+                                    <TableCell>
                                       {device.installed_at
                                         ? new Date(device.installed_at).toLocaleDateString()
                                         : "-"}
                                     </TableCell>
                                     <TableCell className="text-right">
-                                      <div className="flex justify-end gap-2">
+                                      <div className="flex justify-end gap-1.5 flex-wrap items-center">
+                                        {device.approval_status === "pending" ? (
+                                          <>
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              onClick={() => handleApproveDevice(device.id)}
+                                              className="h-7 px-2 text-xs text-green-700 border-green-200 hover:bg-green-50 dark:text-green-300 dark:border-green-800 dark:hover:bg-green-950/50"
+                                              title="Approve device"
+                                            >
+                                              <Check className="h-3 w-3 mr-1" />
+                                              Approve
+                                            </Button>
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              onClick={() => handleRejectDevice(device.id)}
+                                              className="h-7 px-2 text-xs text-red-700 border-red-200 hover:bg-red-50 dark:text-red-300 dark:border-red-800 dark:hover:bg-red-950/50"
+                                              title="Reject device"
+                                            >
+                                              <X className="h-3 w-3 mr-1" />
+                                              Reject
+                                            </Button>
+                                          </>
+                                        ) : device.approval_status === "rejected" ? (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleApproveDevice(device.id)}
+                                            className="h-7 px-2 text-xs text-green-700 border-green-200 hover:bg-green-50 dark:text-green-300 dark:border-green-800 dark:hover:bg-green-950/50"
+                                            title="Approve device"
+                                          >
+                                            <Check className="h-3 w-3 mr-1" />
+                                            Approve
+                                          </Button>
+                                        ) : (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => handleRejectDevice(device.id)}
+                                            className="h-7 px-2 text-xs text-red-700 border-red-200 hover:bg-red-50 dark:text-red-300 dark:border-red-800 dark:hover:bg-red-950/50"
+                                            title="Reject device"
+                                          >
+                                            <X className="h-3 w-3 mr-1" />
+                                            Reject
+                                          </Button>
+                                        )}
                                         <Button
                                           variant="outline"
                                           size="sm"
                                           onClick={() => openRegenerateConfirm(device)}
                                           disabled={regeneratingDeviceId === device.id}
                                           title="Regenerate API key (for device auth)"
+                                          className="h-7 px-2"
                                         >
                                           {regeneratingDeviceId === device.id ? (
                                             <span className="animate-pulse">...</span>
@@ -1084,6 +1347,8 @@ export default function AdminDashboard() {
                                           variant="outline"
                                           size="sm"
                                           onClick={() => openDeviceDialog(device)}
+                                          className="h-7 px-2"
+                                          title="Edit device"
                                         >
                                           <Edit className="h-3 w-3" />
                                         </Button>
@@ -1091,7 +1356,8 @@ export default function AdminDashboard() {
                                           variant="outline"
                                           size="sm"
                                           onClick={() => handleDeleteDevice(device.id)}
-                                          className="text-red-600 hover:text-red-700"
+                                          className="h-7 px-2 text-red-600 hover:text-red-700"
+                                          title="Delete device"
                                         >
                                           <Trash2 className="h-3 w-3" />
                                         </Button>
@@ -1262,6 +1528,94 @@ export default function AdminDashboard() {
                 Cancel
               </Button>
               <Button onClick={handleResetPassword}>Reset Password</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Status Update Dialog */}
+        <Dialog open={bulkStatusDialogOpen} onOpenChange={setBulkStatusDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Bulk Update Device Status</DialogTitle>
+              <DialogDescription>
+                Set the status for {selectedDevices.size} selected device(s).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div>
+                <Label htmlFor="bulk-status">New Status</Label>
+                <select
+                  id="bulk-status"
+                  className="w-full px-3 py-2 border rounded-md mt-1"
+                  value={bulkStatusValue}
+                  onChange={(e) =>
+                    setBulkStatusValue(
+                      e.target.value as "active" | "offline" | "maintenance"
+                    )
+                  }
+                >
+                  <option value="active">Active</option>
+                  <option value="offline">Offline</option>
+                  <option value="maintenance">Maintenance</option>
+                </select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setBulkStatusDialogOpen(false)}
+                disabled={bulkLoading}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleBulkStatusUpdate} disabled={bulkLoading}>
+                {bulkLoading ? "Updating..." : "Update Status"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Location Update Dialog */}
+        <Dialog open={bulkLocationDialogOpen} onOpenChange={setBulkLocationDialogOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Bulk Update Device Location</DialogTitle>
+              <DialogDescription>
+                Assign {selectedDevices.size} selected device(s) to a new location.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div>
+                <Label htmlFor="bulk-location">New Location</Label>
+                <select
+                  id="bulk-location"
+                  className="w-full px-3 py-2 border rounded-md mt-1"
+                  value={bulkLocationId}
+                  onChange={(e) => setBulkLocationId(e.target.value)}
+                >
+                  <option value="">Select location</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setBulkLocationDialogOpen(false)}
+                disabled={bulkLoading}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleBulkLocationUpdate}
+                disabled={bulkLoading || !bulkLocationId}
+              >
+                {bulkLoading ? "Updating..." : "Update Location"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
