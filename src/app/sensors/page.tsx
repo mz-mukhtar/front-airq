@@ -11,7 +11,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { getLocations } from "@/lib/api/locations";
 import { getSensorDevices } from "@/lib/api/sensor-devices";
 import { Location, SensorDevice, SensorReading } from "@/lib/api/types";
-import { extractReadingValue, extractReadingValueOrNull, extractTimestamp, calculateAQI, getAQIStatus } from "@/lib/utils/readings";
+import { extractReadingValue, extractReadingValueOrNull, extractTimestamp, calculateAQI, getAQIStatus, getAirQualityLevelBadgeClass } from "@/lib/utils/readings";
 import {
   fetchChartSeries,
   filtersToRawParams,
@@ -30,7 +30,14 @@ import {
   ChartTimeRange,
   chartWindowTitle,
   seriesFiltersForRange,
+  chartRangeToSeriesParams,
 } from "@/lib/utils/chart-time-range";
+import {
+  getAnalyticsSummary,
+  getAnalyticsAqi,
+  AnalyticsSummaryResponse,
+  AnalyticsAqiDeviceRow,
+} from "@/lib/api/analytics";
 import { ChartTimeRangeSelector } from "@/components/sensors/ChartTimeRangeSelector";
 import { ChartTimelineScrubber } from "@/components/sensors/ChartTimelineScrubber";
 import {
@@ -71,7 +78,7 @@ interface StationData {
   temperature: number;
   voc: number;
   nox: number;
-  aqi: number;
+  aqi: number | string | null;
   status: string;
   deviceId: string;
   locationId: string;
@@ -195,6 +202,8 @@ function SensorsContent() {
   }>>([]);
   const [chartTimeRange, setChartTimeRange] = useState<ChartTimeRange>("24h");
   const [seriesRefreshing, setSeriesRefreshing] = useState(false);
+  const [summaryData, setSummaryData] = useState<AnalyticsSummaryResponse | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [zoomDomain, setZoomDomain] = useState<ZoomDomain>(null);
   const skipRangeFetchRef = useRef(true);
   const chartTimeRangeRef = useRef(chartTimeRange);
@@ -245,7 +254,8 @@ function SensorsContent() {
     (
       seriesResponse: Awaited<ReturnType<typeof fetchChartSeries>>,
       devicesToFetch: string[],
-      queryKey: string
+      queryKey: string,
+      deviceAqiMap?: Map<string, AnalyticsAqiDeviceRow>
     ) => {
       setSeriesMeta(seriesResponse.meta);
 
@@ -269,9 +279,10 @@ function SensorsContent() {
         const buckets = groupedBuckets[deviceIdToFetch] ?? [];
         const latest = latestMetricsFromBuckets(buckets);
         const sortedReadings = graphUpdates[deviceIdToFetch] ?? [];
+        const deviceRow = deviceAqiMap?.get(deviceIdToFetch);
 
         if (sortedReadings.length > 0 || latest.recorded_at) {
-          const aqi = calculateAQI(latest.pm2_5, latest.pm10);
+          const status = deviceRow?.aqi_category ?? getAQIStatus(calculateAQI(latest.pm2_5, latest.pm10));
           stationsData.push({
             id: deviceIdToFetch,
             name: deviceInfo.location.name,
@@ -281,8 +292,8 @@ function SensorsContent() {
             temperature: latest.temperature,
             voc: latest.voc,
             nox: latest.nox,
-            aqi,
-            status: getAQIStatus(aqi),
+            aqi: deviceRow ? null : calculateAQI(latest.pm2_5, latest.pm10),
+            status,
             deviceId: deviceIdToFetch,
             locationId: deviceInfo.location.id,
             readings: sortedReadings,
@@ -338,14 +349,37 @@ function SensorsContent() {
       if (blocking) {
         setIsLoading(true);
         setError(null);
+        setSummaryLoading(true);
       } else {
         setSeriesRefreshing(true);
       }
 
       try {
-        const seriesResponse = await fetchChartSeries(seriesFiltersForRange(range), devicesToFetch);
+        const rangeParams = chartRangeToSeriesParams(range);
+        const days = rangeParams.days ?? (rangeParams.hours ? (rangeParams.hours <= 24 ? 1 : Math.ceil(rangeParams.hours / 24)) : 30);
+        const filterDeviceIds = devicesToFetch.length < availableDevices.length ? devicesToFetch : undefined;
+
+        const [seriesResponse, aqiResponse, summaryRes] = await Promise.all([
+          fetchChartSeries(seriesFiltersForRange(range), devicesToFetch),
+          getAnalyticsAqi({ days, group_by: "device", device_ids: filterDeviceIds }).catch((e) => {
+            console.error("Error fetching grouped AQI:", e);
+            return null;
+          }),
+          getAnalyticsSummary({ days, device_ids: filterDeviceIds }).catch((e) => {
+            console.error("Error fetching analytics summary:", e);
+            return null;
+          }),
+        ]);
         if (requestId !== seriesRequestIdRef.current) return;
-        applySeriesResponse(seriesResponse, devicesToFetch, queryKey);
+
+        if (summaryRes) setSummaryData(summaryRes);
+        const deviceAqiMap = new Map<string, AnalyticsAqiDeviceRow>();
+        if (aqiResponse && Array.isArray(aqiResponse.data)) {
+          (aqiResponse.data as AnalyticsAqiDeviceRow[]).forEach((row) => {
+            if (row.device_id) deviceAqiMap.set(row.device_id, row);
+          });
+        }
+        applySeriesResponse(seriesResponse, devicesToFetch, queryKey, deviceAqiMap);
       } catch (err: unknown) {
         if (requestId !== seriesRequestIdRef.current) return;
         console.error("Error fetching sensor readings:", err);
@@ -358,10 +392,11 @@ function SensorsContent() {
         if (requestId === seriesRequestIdRef.current) {
           setIsLoading(false);
           setSeriesRefreshing(false);
+          setSummaryLoading(false);
         }
       }
     },
-    [applySeriesResponse]
+    [applySeriesResponse, availableDevices.length]
   );
 
   // Initial / station selection fetch (full-page loader only when no data yet)
@@ -2073,6 +2108,61 @@ function SensorsContent() {
           </div>
         )}
 
+        {/* Network Analytics Summary */}
+        {summaryData && (
+          <Card className="border shadow-sm mb-4">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-semibold">Time Window Summary</CardTitle>
+                  <CardDescription className="text-xs">
+                    {summaryData.total_readings.toLocaleString()} readings across {summaryData.device_count} {summaryData.device_count === 1 ? "device" : "devices"}
+                  </CardDescription>
+                </div>
+                {summaryLoading && <div className="text-xs text-muted-foreground animate-pulse">Updating...</div>}
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                  <div className="text-xs font-medium text-muted-foreground">PM2.5 Average</div>
+                  <div className="text-lg font-bold mt-0.5">
+                    {summaryData.statistics.pm2_5?.avg !== null && summaryData.statistics.pm2_5?.avg !== undefined ? `${summaryData.statistics.pm2_5.avg.toFixed(1)} µg/m³` : "—"}
+                  </div>
+                  {summaryData.statistics.pm2_5?.min !== null && summaryData.statistics.pm2_5?.max !== null && (
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      Min: {summaryData.statistics.pm2_5?.min?.toFixed(1)} · Max: {summaryData.statistics.pm2_5?.max?.toFixed(1)}
+                    </div>
+                  )}
+                </div>
+                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                  <div className="text-xs font-medium text-muted-foreground">PM10 Average</div>
+                  <div className="text-lg font-bold mt-0.5">
+                    {summaryData.statistics.pm10?.avg !== null && summaryData.statistics.pm10?.avg !== undefined ? `${summaryData.statistics.pm10.avg.toFixed(1)} µg/m³` : "—"}
+                  </div>
+                  {summaryData.statistics.pm10?.min !== null && summaryData.statistics.pm10?.max !== null && (
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      Min: {summaryData.statistics.pm10?.min?.toFixed(1)} · Max: {summaryData.statistics.pm10?.max?.toFixed(1)}
+                    </div>
+                  )}
+                </div>
+                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                  <div className="text-xs font-medium text-muted-foreground">Avg Temperature</div>
+                  <div className="text-lg font-bold mt-0.5">
+                    {summaryData.statistics.temperature?.avg !== null && summaryData.statistics.temperature?.avg !== undefined ? `${summaryData.statistics.temperature.avg.toFixed(1)}°C` : "—"}
+                  </div>
+                </div>
+                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                  <div className="text-xs font-medium text-muted-foreground">Avg Humidity</div>
+                  <div className="text-lg font-bold mt-0.5">
+                    {summaryData.statistics.humidity?.avg !== null && summaryData.statistics.humidity?.avg !== undefined ? `${summaryData.statistics.humidity.avg.toFixed(1)}%` : "—"}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Station Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {displayStations.map((station) => (
@@ -2094,9 +2184,15 @@ function SensorsContent() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">AQI Category:</span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${station.hasData ? getAirQualityLevelBadgeClass(station.status) : "bg-gray-100 text-gray-600"}`}>
+                    {station.status}
+                  </span>
+                </div>
                 <div className="flex justify-between">
                   <span className="text-sm text-muted-foreground">AQI:</span>
-                  <span className="font-bold">{station.hasData ? station.aqi : "—"}</span>
+                  <span className="font-bold">{station.hasData && station.aqi !== null ? station.aqi : "—"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-sm text-muted-foreground">PM2.5:</span>
