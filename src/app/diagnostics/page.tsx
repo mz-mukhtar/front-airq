@@ -6,13 +6,15 @@ import { AppShell } from "@/components/layout/AppShell";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Activity, RefreshCw, AlertTriangle, Check, X } from "lucide-react";
+import { Activity, RefreshCw, AlertTriangle, Check, X, Database, FileText } from "lucide-react";
 import { getSensorHealth, purgeBadTimestamps } from "@/lib/api/sensor-health";
 import {
   SensorHealthResponse,
   SensorHealthStation,
   SensorHealthStatus,
 } from "@/lib/api/types";
+import { InfrastructureStatus } from "@/components/diagnostics/InfrastructureStatus";
+import { RequestLogViewer } from "@/components/diagnostics/RequestLogViewer";
 
 const AUTO_REFRESH_MS = 60_000;
 
@@ -265,6 +267,7 @@ function StationCard({
 }
 
 function DiagnosticsContent() {
+  const [activeTab, setActiveTab] = useState<"sensor_health" | "infrastructure" | "request_logs">("sensor_health");
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<SensorHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -341,118 +344,166 @@ function DiagnosticsContent() {
   const summary = data?.summary;
 
   return (
-    <div className="mx-auto max-w-7xl p-6 md:p-8">
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Sensor Health</h1>
-          <p className="text-sm text-muted-foreground">
-            {data ? (
-              <>
-                Generated {formatGeneratedAt(data.generated_at)}
-                {data.window_days !== undefined && (
-                  <span className="ml-2">
-                    · {data.window_days === 1 ? "Last 24 hours" : `Showing data from the last ${data.window_days} days`}
-                  </span>
-                )}
-              </>
-            ) : (
-              "Live diagnostics for all sensor stations"
-            )}
-            <span className="ml-2 text-xs text-muted-foreground/70">
-              · auto-refreshes every 60s
-            </span>
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="inline-flex rounded-lg border bg-muted/40 p-0.5">
-            {PERIOD_OPTIONS.map((option) => (
-              <Button
-                key={option.value}
-                type="button"
-                size="sm"
-                variant={days === option.value ? "default" : "ghost"}
-                className={
-                  days === option.value
-                    ? "h-8 bg-[#016FC4] text-white hover:bg-[#015a9e]"
-                    : "h-8 text-muted-foreground hover:text-foreground"
-                }
-                disabled={loading && !data}
-                onClick={() => setDays(option.value)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-          <Button
-            variant="outline"
-            onClick={() => load(false)}
-            disabled={loading || refreshing}
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
+    <div className="mx-auto max-w-7xl p-6 md:p-8 space-y-6">
+      {/* Navigation Tabs */}
+      <div className="flex border-b border-border pb-px overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => setActiveTab("sensor_health")}
+          className={`flex items-center gap-2 border-b-2 py-2.5 px-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            activeTab === "sensor_health"
+              ? "border-[#016FC4] text-[#016FC4]"
+              : "border-transparent text-muted-foreground hover:border-gray-300 hover:text-foreground"
+          }`}
+        >
+          <Activity className="h-4 w-4" />
+          Sensor Health
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("infrastructure")}
+          className={`flex items-center gap-2 border-b-2 py-2.5 px-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            activeTab === "infrastructure"
+              ? "border-[#016FC4] text-[#016FC4]"
+              : "border-transparent text-muted-foreground hover:border-gray-300 hover:text-foreground"
+          }`}
+        >
+          <Database className="h-4 w-4" />
+          Infrastructure
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("request_logs")}
+          className={`flex items-center gap-2 border-b-2 py-2.5 px-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            activeTab === "request_logs"
+              ? "border-[#016FC4] text-[#016FC4]"
+              : "border-transparent text-muted-foreground hover:border-gray-300 hover:text-foreground"
+          }`}
+        >
+          <FileText className="h-4 w-4" />
+          Request Logs
+        </button>
       </div>
 
-      {error && (
-        <div className="mb-4 flex items-start justify-between gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
-          <span>{error}</span>
-          <button
-            onClick={() => setError(null)}
-            className="text-red-500 hover:text-red-700"
-            aria-label="Dismiss"
-          >
-            <X className="h-4 w-4" />
-          </button>
+      {activeTab === "sensor_health" && (
+        <div>
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-xl font-semibold">Sensor Health</h1>
+              <p className="text-sm text-muted-foreground">
+                {data ? (
+                  <>
+                    Generated {formatGeneratedAt(data.generated_at)}
+                    {data.window_days !== undefined && (
+                      <span className="ml-2">
+                        · {data.window_days === 1 ? "Last 24 hours" : `Showing data from the last ${data.window_days} days`}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  "Live diagnostics for all sensor stations"
+                )}
+                <span className="ml-2 text-xs text-muted-foreground/70">
+                  · auto-refreshes every 60s
+                </span>
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex rounded-lg border bg-muted/40 p-0.5">
+                {PERIOD_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    size="sm"
+                    variant={days === option.value ? "default" : "ghost"}
+                    className={
+                      days === option.value
+                        ? "h-8 bg-[#016FC4] text-white hover:bg-[#015a9e]"
+                        : "h-8 text-muted-foreground hover:text-foreground"
+                    }
+                    disabled={loading && !data}
+                    onClick={() => setDays(option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => load(false)}
+                disabled={loading || refreshing}
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="mb-4 flex items-start justify-between gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+              <span>{error}</span>
+              <button
+                onClick={() => setError(null)}
+                className="text-red-500 hover:text-red-700"
+                aria-label="Dismiss"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
+          {loading ? (
+            <LoadingState
+              variant="inline"
+              message="Loading sensor health"
+              hint="Querying diagnostics for all stations"
+              className="py-12"
+            />
+          ) : !data ? (
+            <p className="py-12 text-center text-muted-foreground">No diagnostics available.</p>
+          ) : (
+            <>
+              {summary && (
+                <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+                  <SummaryCard label="Stations" value={summary.stations} />
+                  <SummaryCard label="Online" value={summary.online} tone="green" />
+                  <SummaryCard label="Stale" value={summary.stale} tone="amber" />
+                  <SummaryCard label="Offline" value={summary.offline} tone="red" />
+                  <SummaryCard label="No data" value={summary.no_data} tone="gray" />
+                  <SummaryCard
+                    label="Total readings"
+                    value={summary.total_readings.toLocaleString()}
+                  />
+                  <SummaryCard
+                    label="Bad timestamps"
+                    value={summary.total_bad_timestamps}
+                    tone={summary.total_bad_timestamps > 0 ? "red" : "default"}
+                  />
+                </div>
+              )}
+
+              {data.stations.length === 0 ? (
+                <p className="py-12 text-center text-muted-foreground">No stations found.</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  {data.stations.map((station) => (
+                    <StationCard
+                      key={station.device_id}
+                      station={station}
+                      onFix={handleFix}
+                      fixing={fixingDeviceId === station.device_id}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
-      {loading ? (
-        <LoadingState
-          variant="inline"
-          message="Loading sensor health"
-          hint="Querying diagnostics for all stations"
-          className="py-12"
-        />
-      ) : !data ? (
-        <p className="py-12 text-center text-muted-foreground">No diagnostics available.</p>
-      ) : (
-        <>
-          {summary && (
-            <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
-              <SummaryCard label="Stations" value={summary.stations} />
-              <SummaryCard label="Online" value={summary.online} tone="green" />
-              <SummaryCard label="Stale" value={summary.stale} tone="amber" />
-              <SummaryCard label="Offline" value={summary.offline} tone="red" />
-              <SummaryCard label="No data" value={summary.no_data} tone="gray" />
-              <SummaryCard
-                label="Total readings"
-                value={summary.total_readings.toLocaleString()}
-              />
-              <SummaryCard
-                label="Bad timestamps"
-                value={summary.total_bad_timestamps}
-                tone={summary.total_bad_timestamps > 0 ? "red" : "default"}
-              />
-            </div>
-          )}
+      {activeTab === "infrastructure" && <InfrastructureStatus />}
 
-          {data.stations.length === 0 ? (
-            <p className="py-12 text-center text-muted-foreground">No stations found.</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {data.stations.map((station) => (
-                <StationCard
-                  key={station.device_id}
-                  station={station}
-                  onFix={handleFix}
-                  fixing={fixingDeviceId === station.device_id}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
+      {activeTab === "request_logs" && <RequestLogViewer />}
     </div>
   );
 }
@@ -462,8 +513,8 @@ export default function DiagnosticsPage() {
     <AdminRouteGuard>
       <AppShell
         sectionLabel="Administration"
-        title="Sensor Health"
-        subtitle="Diagnostics for all sensor stations"
+        title="System Diagnostics"
+        subtitle="Sensor health, database infrastructure, and API request logs"
         icon={Activity}
         mainClassName="bg-transparent"
       >

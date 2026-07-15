@@ -458,6 +458,97 @@ export interface SensorHealthResponse {
   stations: SensorHealthStation[];
 }
 
+// Admin Operations and Infrastructure Monitoring Types
+export interface DatabaseConnectionPoolStats {
+  pool_size: number;
+  checked_in: number;
+  checked_out: number;
+  overflow: number;
+  invalid: number;
+  available: number;
+  utilization_percent: number;
+}
+
+export interface DatabaseInfo {
+  version?: string;
+  timezone?: string;
+  size?: string;
+  active_connections?: number;
+}
+
+export interface DatabaseHealthResponse {
+  status: string;
+  timestamp: string | null;
+  connection_pool: DatabaseConnectionPoolStats | Record<string, never>;
+  database_info: DatabaseInfo;
+  errors: string[];
+}
+
+export interface DatabasePoolStatsResponse {
+  connection_pool: DatabaseConnectionPoolStats;
+  timestamp: string | null;
+}
+
+export interface PerformanceEndpointMetric {
+  total_requests: number;
+  avg_response_time_ms?: number;
+  min_response_time_ms?: number;
+  max_response_time_ms?: number;
+  p95_response_time_ms?: number;
+  p99_response_time_ms?: number;
+}
+
+export interface PerformanceSingleEndpointMetric extends PerformanceEndpointMetric {
+  endpoint: string;
+}
+
+export interface PerformanceStatsResponse {
+  performance_stats: Record<string, PerformanceEndpointMetric> | PerformanceSingleEndpointMetric;
+  timestamp: string | null;
+}
+
+export interface LogCleanupResults {
+  audit_logs: number;
+  password_reset_tokens: number;
+  password_history: number;
+  token_blacklist: number;
+  timestamp: string;
+}
+
+export interface LogCleanupResponse {
+  message: string;
+  results: LogCleanupResults;
+}
+
+export interface RequestLog {
+  id: string;
+  request_id: string;
+  method: string;
+  path: string;
+  status_code: number;
+  duration_ms: number | null;
+  device_id: string | null;
+  user_email: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  error_detail: string | null;
+  created_at: string;
+}
+
+export interface RequestLogsParams {
+  request_id?: string;
+  method?: string;
+  path?: string;
+  status_code?: number;
+  errors_only?: boolean;
+  device_id?: string;
+  user_email?: string;
+  since?: string;
+  until?: string;
+  limit?: number;
+  offset?: number;
+}
+
 // Error response
 export interface ApiError {
   detail?: string;
