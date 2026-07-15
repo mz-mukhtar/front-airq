@@ -1,4 +1,4 @@
-import { MapPin, Database, Settings, Shield, Activity, type LucideIcon } from "lucide-react";
+import { MapPin, Database, Settings, Shield, Activity, AlertTriangle, type LucideIcon } from "lucide-react";
 
 export interface AppNavItem {
   icon: LucideIcon;
@@ -10,6 +10,7 @@ export interface AppNavItem {
 export const APP_NAV_ITEMS: AppNavItem[] = [
   { icon: MapPin, label: "Map", path: "/dashboard", description: "Live stations" },
   { icon: Database, label: "Sensors", path: "/sensors", description: "Charts & export" },
+  { icon: AlertTriangle, label: "Alerts", path: "/alerts", description: "Exceedances" },
   { icon: Settings, label: "Settings", path: "/settings", description: "Preferences" },
 ];
 
