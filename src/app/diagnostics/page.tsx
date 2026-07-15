@@ -16,6 +16,14 @@ import {
 
 const AUTO_REFRESH_MS = 60_000;
 
+const PERIOD_OPTIONS = [
+  { label: "24h", value: 1 },
+  { label: "7d", value: 7 },
+  { label: "30d", value: 30 },
+  { label: "90d", value: 90 },
+  { label: "1y", value: 365 },
+] as const;
+
 const STATUS_STYLES: Record<
   SensorHealthStatus,
   { label: string; badge: string; dot: string }
@@ -257,6 +265,7 @@ function StationCard({
 }
 
 function DiagnosticsContent() {
+  const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<SensorHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -264,28 +273,32 @@ function DiagnosticsContent() {
   const [fixingDeviceId, setFixingDeviceId] = useState<string | null>(null);
   const isMounted = useRef(true);
   const inFlight = useRef(false);
+  const dataRef = useRef<SensorHealthResponse | null>(null);
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async (isInitial: boolean) => {
-    if (inFlight.current) return;
+    if (!isInitial && inFlight.current) return;
+    const currentId = ++requestIdRef.current;
     inFlight.current = true;
-    if (isInitial) setLoading(true);
+    if (isInitial && !dataRef.current) setLoading(true);
     else setRefreshing(true);
     try {
-      const res = await getSensorHealth();
-      if (!isMounted.current) return;
+      const res = await getSensorHealth(days);
+      if (!isMounted.current || requestIdRef.current !== currentId) return;
+      dataRef.current = res;
       setData(res);
       setError(null);
     } catch (err: unknown) {
-      if (!isMounted.current) return;
+      if (!isMounted.current || requestIdRef.current !== currentId) return;
       setError(err instanceof Error ? err.message : "Failed to load sensor health");
     } finally {
-      inFlight.current = false;
-      if (isMounted.current) {
+      if (isMounted.current && requestIdRef.current === currentId) {
+        inFlight.current = false;
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, []);
+  }, [days]);
 
   const handleFix = useCallback(
     async (station: SensorHealthStation) => {
@@ -329,12 +342,19 @@ function DiagnosticsContent() {
 
   return (
     <div className="mx-auto max-w-7xl p-6 md:p-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">Sensor Health</h1>
           <p className="text-sm text-muted-foreground">
             {data ? (
-              <>Generated {formatGeneratedAt(data.generated_at)}</>
+              <>
+                Generated {formatGeneratedAt(data.generated_at)}
+                {data.window_days !== undefined && (
+                  <span className="ml-2">
+                    · {data.window_days === 1 ? "Last 24 hours" : `Showing data from the last ${data.window_days} days`}
+                  </span>
+                )}
+              </>
             ) : (
               "Live diagnostics for all sensor stations"
             )}
@@ -343,14 +363,35 @@ function DiagnosticsContent() {
             </span>
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => load(false)}
-          disabled={loading || refreshing}
-        >
-          <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border bg-muted/40 p-0.5">
+            {PERIOD_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                size="sm"
+                variant={days === option.value ? "default" : "ghost"}
+                className={
+                  days === option.value
+                    ? "h-8 bg-[#016FC4] text-white hover:bg-[#015a9e]"
+                    : "h-8 text-muted-foreground hover:text-foreground"
+                }
+                disabled={loading && !data}
+                onClick={() => setDays(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => load(false)}
+            disabled={loading || refreshing}
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {error && (

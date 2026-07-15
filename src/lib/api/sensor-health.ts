@@ -2,8 +2,9 @@ import { apiRequest } from './client';
 import { SensorHealthResponse } from './types';
 
 // Get sensor health / diagnostics report (Admin only).
-export async function getSensorHealth(): Promise<SensorHealthResponse> {
-  return apiRequest<SensorHealthResponse>('/admin/sensor-health', {
+export async function getSensorHealth(days?: number): Promise<SensorHealthResponse> {
+  const query = days !== undefined ? `?days=${encodeURIComponent(days)}` : '';
+  return apiRequest<SensorHealthResponse>(`/admin/sensor-health${query}`, {
     requireAuth: true,
   });
 }

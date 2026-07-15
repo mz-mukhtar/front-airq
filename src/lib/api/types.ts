@@ -434,6 +434,7 @@ export interface SensorHealthStation {
 export interface SensorHealthResponse {
   generated_at: string;
   timezone: string;
+  window_days: number;
   summary: SensorHealthSummary;
   stations: SensorHealthStation[];
 }
