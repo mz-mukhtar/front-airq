@@ -34,9 +34,7 @@ export function bucketToReading(bucket: SeriesBucket): SensorReading {
   return {
     id: `${bucket.device_id}-${bucket.bucket_start}`,
     device_id: bucket.device_id,
-    pm1_0: bucket.pm1_0?.avg ?? undefined,
     pm2_5: bucket.pm2_5?.avg ?? undefined,
-    pm4_0: bucket.pm4_0?.avg ?? undefined,
     pm10: bucket.pm10?.avg ?? undefined,
     temperature: bucket.temperature?.avg ?? undefined,
     humidity: bucket.humidity?.avg ?? undefined,
@@ -257,9 +255,7 @@ export async function fetchChartSeries(
 }
 
 export interface LatestSeriesMetrics {
-  pm1_0: number;
   pm2_5: number;
-  pm4_0: number;
   pm10: number;
   temperature: number;
   humidity: number;
@@ -278,9 +274,7 @@ export function latestMetricsFromBuckets(buckets: SeriesBucket[]): LatestSeriesM
     if (bucket.sample_count === 0) continue;
 
     return {
-      pm1_0: bucket.pm1_0?.avg ?? 0,
       pm2_5: bucket.pm2_5?.avg ?? 0,
-      pm4_0: bucket.pm4_0?.avg ?? 0,
       pm10: bucket.pm10?.avg ?? 0,
       temperature: bucket.temperature?.avg ?? 0,
       humidity: bucket.humidity?.avg ?? 0,
@@ -291,9 +285,7 @@ export function latestMetricsFromBuckets(buckets: SeriesBucket[]): LatestSeriesM
   }
 
   return {
-    pm1_0: 0,
     pm2_5: 0,
-    pm4_0: 0,
     pm10: 0,
     temperature: 0,
     humidity: 0,

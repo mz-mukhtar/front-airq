@@ -61,9 +61,7 @@ import {
 interface StationData {
   id: string;
   name: string;
-  pm1_0: number;
   pm2_5: number;
-  pm4_0: number;
   pm10_0: number;
   humidity: number;
   temperature: number;
@@ -276,9 +274,7 @@ function SensorsContent() {
           stationsData.push({
             id: deviceIdToFetch,
             name: deviceInfo.location.name,
-            pm1_0: latest.pm1_0,
             pm2_5: latest.pm2_5,
-            pm4_0: latest.pm4_0,
             pm10_0: latest.pm10,
             humidity: latest.humidity,
             temperature: latest.temperature,
@@ -296,9 +292,7 @@ function SensorsContent() {
           stationsData.push({
             id: deviceIdToFetch,
             name: deviceInfo.location.name,
-            pm1_0: 0,
             pm2_5: 0,
-            pm4_0: 0,
             pm10_0: 0,
             humidity: 0,
             temperature: 0,

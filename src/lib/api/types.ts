@@ -106,9 +106,7 @@ export interface SeriesBucket {
   bucket_end: string;
   device_id: string;
   location_id: string | null;
-  pm1_0: MetricStats | null;
   pm2_5: MetricStats | null;
-  pm4_0: MetricStats | null;
   pm10: MetricStats | null;
   temperature: MetricStats | null;
   humidity: MetricStats | null;
@@ -147,9 +145,7 @@ export interface SensorReadingsPaginatedResponse {
 }
 
 export type SeriesMetricKey =
-  | 'pm1_0'
   | 'pm2_5'
-  | 'pm4_0'
   | 'pm10'
   | 'temperature'
   | 'humidity'
