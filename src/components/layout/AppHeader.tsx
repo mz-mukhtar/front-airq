@@ -24,8 +24,13 @@ export function AppHeader({
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 flex h-[3.75rem] shrink-0 items-center gap-4 border-b border-border/60",
-        "bg-background/80 px-4 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70 md:px-6",
+        // min-h, not a fixed h: the previous 3.75rem was exactly the height of
+        // the three text lines, leaving no room above or below and letting a
+        // long title press against the border. The min keeps every page's
+        // header the same height; the padding is what stops it crushing.
+        "sticky top-0 z-30 flex min-h-[var(--app-header-height)] shrink-0 items-center gap-4",
+        "border-b border-border/60 bg-background/80 px-4 py-2.5 backdrop-blur-xl",
+        "supports-[backdrop-filter]:bg-background/70 md:px-6",
         className
       )}
     >
@@ -35,20 +40,38 @@ export function AppHeader({
             <Icon className="h-5 w-5" />
           </div>
         )}
-        <div className="min-w-0">
+        {/*
+          Two lines, not three: the section label sits above, and the title and
+          subtitle share the line below as "Title : subtitle". The subtitle is
+          the part that gives when space runs short — it truncates while the
+          title stays whole, since the title is what identifies the page.
+        */}
+        <div className="min-w-0 space-y-1">
           {sectionLabel && (
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+            <p className="text-[10px] font-semibold uppercase leading-none tracking-[0.2em] text-muted-foreground">
               {sectionLabel}
             </p>
           )}
-          {title && (
-            <h1 className="truncate text-base font-semibold text-foreground md:text-lg">
-              {title}
-            </h1>
-          )}
-          {subtitle && (
-            <p className="hidden truncate text-xs text-muted-foreground sm:block">{subtitle}</p>
-          )}
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            {title && (
+              <h1 className="max-w-full shrink-0 truncate text-base font-semibold leading-tight text-foreground md:text-lg">
+                {title}
+              </h1>
+            )}
+            {subtitle && (
+              <span
+                className="hidden min-w-0 items-baseline gap-1.5 sm:flex"
+                title={subtitle}
+              >
+                <span aria-hidden className="text-muted-foreground/60">
+                  :
+                </span>
+                <span className="truncate text-xs leading-tight text-muted-foreground">
+                  {subtitle}
+                </span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

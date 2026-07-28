@@ -254,15 +254,29 @@ export async function fetchChartSeries(
   return response;
 }
 
+/**
+ * Metrics are nullable: a bucket can carry readings for some sensors and not
+ * others, and an unreported metric must surface as "—" rather than 0.
+ */
 export interface LatestSeriesMetrics {
-  pm2_5: number;
-  pm10: number;
-  temperature: number;
-  humidity: number;
-  voc: number;
-  nox: number;
+  pm2_5: number | null;
+  pm10: number | null;
+  temperature: number | null;
+  humidity: number | null;
+  voc: number | null;
+  nox: number | null;
   recorded_at: string | null;
 }
+
+const EMPTY_LATEST_METRICS: LatestSeriesMetrics = {
+  pm2_5: null,
+  pm10: null,
+  temperature: null,
+  humidity: null,
+  voc: null,
+  nox: null,
+  recorded_at: null,
+};
 
 /** Latest values from the most recent non-empty bucket. */
 export function latestMetricsFromBuckets(buckets: SeriesBucket[]): LatestSeriesMetrics {
@@ -274,25 +288,17 @@ export function latestMetricsFromBuckets(buckets: SeriesBucket[]): LatestSeriesM
     if (bucket.sample_count === 0) continue;
 
     return {
-      pm2_5: bucket.pm2_5?.avg ?? 0,
-      pm10: bucket.pm10?.avg ?? 0,
-      temperature: bucket.temperature?.avg ?? 0,
-      humidity: bucket.humidity?.avg ?? 0,
-      voc: bucket.voc_index?.avg ?? 0,
-      nox: bucket.nox_index?.avg ?? 0,
+      pm2_5: bucket.pm2_5?.avg ?? null,
+      pm10: bucket.pm10?.avg ?? null,
+      temperature: bucket.temperature?.avg ?? null,
+      humidity: bucket.humidity?.avg ?? null,
+      voc: bucket.voc_index?.avg ?? null,
+      nox: bucket.nox_index?.avg ?? null,
       recorded_at: bucket.bucket_start,
     };
   }
 
-  return {
-    pm2_5: 0,
-    pm10: 0,
-    temperature: 0,
-    humidity: 0,
-    voc: 0,
-    nox: 0,
-    recorded_at: null,
-  };
+  return { ...EMPTY_LATEST_METRICS };
 }
 
 /** Convert already-grouped series buckets to reading-shaped arrays per device. */

@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { RequestLog, RequestLogsParams } from "@/lib/api/types";
 import { getRequestLogs } from "@/lib/api/admin-operations";
+import { RequestLogDetailModal } from "./RequestLogDetailModal";
 import { RefreshCw, FileText, AlertCircle, Filter, ChevronLeft, ChevronRight } from "lucide-react";
 
 const HTTP_METHODS = ["", "GET", "POST", "PUT", "PATCH", "DELETE"];
@@ -23,6 +24,12 @@ export function RequestLogViewer() {
   const [errorsOnly, setErrorsOnly] = useState<boolean>(false);
   const [limit, setLimit] = useState<number>(100);
   const [offset, setOffset] = useState<number>(0);
+  // Identity filters, set by pivoting from a row rather than typed.
+  const [deviceId, setDeviceId] = useState<string>("");
+  const [userEmail, setUserEmail] = useState<string>("");
+
+  // The row whose detail modal is open (null = closed).
+  const [selected, setSelected] = useState<RequestLog | null>(null);
 
   const isMounted = useRef(true);
   const inFlight = useRef(false);
@@ -43,6 +50,8 @@ export function RequestLogViewer() {
       params.status_code = Number(statusCode);
     }
     if (errorsOnly) params.errors_only = true;
+    if (deviceId) params.device_id = deviceId;
+    if (userEmail) params.user_email = userEmail;
 
     try {
       const res = await getRequestLogs(params);
@@ -59,7 +68,7 @@ export function RequestLogViewer() {
         setRefreshing(false);
       }
     }
-  }, [method, path, statusCode, errorsOnly, limit]);
+  }, [method, path, statusCode, errorsOnly, limit, deviceId, userEmail]);
 
   useEffect(() => {
     isMounted.current = true;
@@ -80,11 +89,24 @@ export function RequestLogViewer() {
     setPath("");
     setStatusCode("");
     setErrorsOnly(false);
+    setDeviceId("");
+    setUserEmail("");
     setOffset(0);
     // Trigger reload immediately with defaults
     setTimeout(() => {
       loadLogs(false, 0);
     }, 0);
+  };
+
+  /**
+   * Jump from an open request to everything like it. The effect on
+   * [deviceId, userEmail, path] reloads, so this only sets state.
+   */
+  const handlePivot = (filter: { path?: string; device_id?: string; user_email?: string }) => {
+    setOffset(0);
+    setDeviceId(filter.device_id ?? "");
+    setUserEmail(filter.user_email ?? "");
+    if (filter.path !== undefined) setPath(filter.path);
   };
 
   const getStatusBadge = (code: number) => {
@@ -126,6 +148,8 @@ export function RequestLogViewer() {
         </div>
         <CardDescription>
           Recorded API requests stored in the request_logs table (newest first). Filter by method, prefix path, or status code.
+          <span className="ml-1 text-muted-foreground/80">Click any row for the full record.</span>
+          <span className="ml-1 text-muted-foreground/80">Kept for 7 days, then deleted automatically.</span>
         </CardDescription>
       </CardHeader>
 
@@ -243,6 +267,28 @@ export function RequestLogViewer() {
           </div>
         </form>
 
+        {(deviceId || userEmail) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+            <span className="text-muted-foreground">Showing requests from</span>
+            <span className="font-mono font-medium text-foreground">
+              {deviceId ? `device ${deviceId}` : userEmail}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                setDeviceId("");
+                setUserEmail("");
+                setOffset(0);
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        )}
+
         {loading ? (
           <div className="py-8 text-center text-xs text-muted-foreground">
             Querying request logs...
@@ -276,7 +322,20 @@ export function RequestLogViewer() {
                 </thead>
                 <tbody className="divide-y">
                   {logs.map((log) => (
-                    <tr key={log.id} className="hover:bg-muted/30">
+                    <tr
+                      key={log.id}
+                      className="cursor-pointer hover:bg-muted/30"
+                      onClick={() => setSelected(log)}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`Open details for ${log.method} ${log.path}`}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelected(log);
+                        }
+                      }}
+                    >
                       <td className="whitespace-nowrap px-3 py-2 text-[11px] text-muted-foreground">
                         {new Date(log.created_at).toLocaleString()}
                       </td>
@@ -334,6 +393,12 @@ export function RequestLogViewer() {
             </div>
           </>
         )}
+
+        <RequestLogDetailModal
+          summary={selected}
+          onClose={() => setSelected(null)}
+          onPivot={handlePivot}
+        />
       </CardContent>
     </Card>
   );

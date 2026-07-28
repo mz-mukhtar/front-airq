@@ -10,21 +10,26 @@ interface AdminRouteGuardProps {
 }
 
 export function AdminRouteGuard({ children }: AdminRouteGuardProps) {
-  const { user, isLoading } = useAuthStore();
-  const isAuthenticated = !!user;
+  // Reads the store's flag rather than deriving `!!user` — deriving it here was
+  // a third, independently-drifting answer to "is this visitor signed in?".
+  const { user, isLoading, isAuthenticated } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading) {
-      if (!isAuthenticated) {
-        router.push("/login");
-        return;
-      }
-      
-      if (user?.role !== "admin") {
-        router.push("/dashboard");
-        return;
-      }
+    if (isLoading) return;
+
+    if (!isAuthenticated) {
+      // Carry the admin page being requested so login can return them to it.
+      const next =
+        typeof window === "undefined"
+          ? ""
+          : `${window.location.pathname}${window.location.search}`;
+      router.replace(next ? `/login?next=${encodeURIComponent(next)}` : "/login");
+      return;
+    }
+
+    if (user?.role !== "admin") {
+      router.replace("/dashboard");
     }
   }, [user, isAuthenticated, isLoading, router]);
 

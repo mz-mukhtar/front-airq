@@ -1,9 +1,13 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { DateRangeFields } from "@/components/ui/date-range-fields";
 import {
   CHART_TIME_RANGE_OPTIONS,
   ChartTimeRange,
+  defaultCustomRange,
+  todayInEat,
+  validateCustomRange,
 } from "@/lib/utils/chart-time-range";
 import { RotateCcw } from "lucide-react";
 
@@ -24,46 +28,85 @@ export function ChartTimeRangeSelector({
   refreshing,
   disabled,
 }: ChartTimeRangeSelectorProps) {
+  const isCustom = value.preset === "custom";
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Time range
-      </span>
-      <div className="inline-flex rounded-lg border bg-muted/40 p-0.5">
-        {CHART_TIME_RANGE_OPTIONS.map((option) => (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Time range
+        </span>
+        <div className="inline-flex rounded-lg border bg-muted/40 p-0.5">
+          {CHART_TIME_RANGE_OPTIONS.map((option) => (
+            <Button
+              key={option.id}
+              type="button"
+              size="sm"
+              variant={value.preset === option.id ? "default" : "ghost"}
+              className={
+                value.preset === option.id
+                  ? "h-8"
+                  : "h-8 text-muted-foreground hover:text-foreground"
+              }
+              disabled={disabled}
+              title={option.description}
+              aria-pressed={value.preset === option.id}
+              onClick={() => onChange({ preset: option.id })}
+            >
+              {option.label}
+            </Button>
+          ))}
           <Button
-            key={option.id}
             type="button"
             size="sm"
-            variant={value === option.id ? "default" : "ghost"}
+            variant={isCustom ? "default" : "ghost"}
             className={
-              value === option.id
-                ? "h-8 bg-[#016FC4] text-white hover:bg-[#015a9e]"
-                : "h-8 text-muted-foreground hover:text-foreground"
+              isCustom ? "h-8" : "h-8 text-muted-foreground hover:text-foreground"
             }
             disabled={disabled}
-            title={option.description}
-            onClick={() => onChange(option.id)}
+            title="Type an exact start and end date"
+            aria-pressed={isCustom}
+            // Seeded with the last 7 days so the charts have something to show
+            // the moment custom is picked.
+            onClick={() => !isCustom && onChange(defaultCustomRange())}
           >
-            {option.label}
+            Custom
           </Button>
-        ))}
+        </div>
+        {zoomActive && onResetZoom && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 gap-1.5"
+            onClick={onResetZoom}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset zoom
+          </Button>
+        )}
+        <span className="text-xs text-muted-foreground hidden sm:inline">
+          {refreshing ? "Updating charts…" : "Use the timeline scrubber to pan and zoom all charts together"}
+        </span>
       </div>
-      {zoomActive && onResetZoom && (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-8 gap-1.5"
-          onClick={onResetZoom}
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          Reset zoom
-        </Button>
+
+      {isCustom && (
+        <DateRangeFields
+          idPrefix="chart-range"
+          value={value}
+          max={todayInEat()}
+          disabled={disabled}
+          validate={(draft) => validateCustomRange({ preset: "custom", ...draft })}
+          hint={
+            value.startTime !== undefined || value.endTime !== undefined
+              ? "Start and end times are inclusive, in Addis Ababa time."
+              : "Both days are included in full, in Addis Ababa time."
+          }
+          onApply={({ start, end, startTime, endTime }) =>
+            onChange({ preset: "custom", start, end, startTime, endTime })
+          }
+        />
       )}
-      <span className="text-xs text-muted-foreground hidden sm:inline">
-        {refreshing ? "Updating charts…" : "Use the timeline scrubber to pan and zoom all charts together"}
-      </span>
     </div>
   );
 }

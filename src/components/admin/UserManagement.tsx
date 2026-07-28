@@ -84,7 +84,7 @@ export function UserManagement() {
       await loadUsers();
       // If we deleted ourselves, logout
       if (user?.id === userId) {
-        logout();
+        await logout();
       }
     } catch (err: any) {
       alert(err.message || "Failed to delete user");

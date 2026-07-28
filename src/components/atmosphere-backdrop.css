@@ -1,0 +1,255 @@
+/* AtmosphereBackdrop — decorative, CSS-only atmospheric layers.
+   Evokes air and atmosphere: drifting cloud blobs, faint curved wind streams,
+   and floating dust/pollen particles. Everything is pointer-events-none,
+   sits behind content, and freezes under prefers-reduced-motion. */
+
+.atmosphere-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* --- Drifting cloud blobs (large, heavily blurred, very slow) --- */
+
+.atmos-cloud {
+  position: absolute;
+  filter: blur(48px);
+  will-change: transform;
+}
+
+.atmos-cloud-1 {
+  top: 4vh;
+  left: -8%;
+  width: 34rem;
+  height: 20rem;
+  border-radius: 58% 42% 55% 45% / 55% 48% 52% 45%;
+  background: radial-gradient(
+    closest-side,
+    rgba(14, 165, 233, 0.12),
+    rgba(14, 165, 233, 0.04) 60%,
+    transparent
+  );
+  animation: atmos-cloud-drift-a 90s ease-in-out infinite alternate;
+}
+
+.atmos-cloud-2 {
+  top: 46vh;
+  right: -10%;
+  width: 40rem;
+  height: 22rem;
+  border-radius: 45% 55% 48% 52% / 52% 45% 55% 48%;
+  background: radial-gradient(
+    closest-side,
+    rgba(22, 163, 74, 0.1),
+    rgba(22, 163, 74, 0.03) 60%,
+    transparent
+  );
+  animation: atmos-cloud-drift-b 120s ease-in-out infinite alternate;
+}
+
+.atmos-cloud-3 {
+  top: 110vh;
+  left: 22%;
+  width: 30rem;
+  height: 18rem;
+  border-radius: 52% 48% 45% 55% / 48% 55% 45% 52%;
+  background: radial-gradient(
+    closest-side,
+    rgba(20, 184, 166, 0.1),
+    rgba(20, 184, 166, 0.03) 60%,
+    transparent
+  );
+  animation: atmos-cloud-drift-a 105s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes atmos-cloud-drift-a {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(6vw, 2vh, 0) scale(1.06);
+  }
+  100% {
+    transform: translate3d(11vw, -1.5vh, 0) scale(1.02);
+  }
+}
+
+@keyframes atmos-cloud-drift-b {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-7vw, 2.5vh, 0) scale(1.05);
+  }
+  100% {
+    transform: translate3d(-12vw, -2vh, 0) scale(1);
+  }
+}
+
+/* --- Faint curved wind-stream lines (arc via border-radius, fade via mask) --- */
+
+.atmos-stream {
+  position: absolute;
+  border-top-width: 1.5px;
+  border-top-style: solid;
+  border-radius: 50%;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent,
+    #000 28%,
+    #000 72%,
+    transparent
+  );
+  mask-image: linear-gradient(90deg, transparent, #000 28%, #000 72%, transparent);
+  will-change: transform;
+}
+
+.atmos-stream-1 {
+  top: 16vh;
+  left: -6vw;
+  width: 68vw;
+  height: 160px;
+  rotate: -5deg;
+  border-top-color: rgba(14, 165, 233, 0.14);
+  animation: atmos-stream-drift 44s ease-in-out infinite alternate;
+}
+
+.atmos-stream-2 {
+  top: 60vh;
+  right: -8vw;
+  width: 58vw;
+  height: 140px;
+  rotate: 4deg;
+  border-top-color: rgba(20, 184, 166, 0.12);
+  animation: atmos-stream-drift 56s ease-in-out infinite alternate-reverse;
+}
+
+.atmos-stream-3 {
+  top: 128vh;
+  left: 8vw;
+  width: 62vw;
+  height: 150px;
+  rotate: -3deg;
+  border-top-color: rgba(22, 163, 74, 0.12);
+  animation: atmos-stream-drift 50s ease-in-out infinite alternate;
+}
+
+@keyframes atmos-stream-drift {
+  from {
+    transform: translate3d(-3vw, 0, 0);
+  }
+  to {
+    transform: translate3d(4vw, 0, 0);
+  }
+}
+
+/* --- Floating dust / pollen particles (small blurred dots) --- */
+
+.atmos-particle {
+  position: absolute;
+  width: var(--s, 5px);
+  height: var(--s, 5px);
+  border-radius: 9999px;
+  filter: blur(1px);
+  will-change: transform;
+  animation: atmos-float var(--d, 26s) ease-in-out infinite;
+}
+
+.atmos-particle--sky {
+  background: rgba(14, 165, 233, 0.4);
+}
+
+.atmos-particle--emerald {
+  background: rgba(22, 163, 74, 0.38);
+}
+
+.atmos-particle--teal {
+  background: rgba(20, 184, 166, 0.38);
+}
+
+@keyframes atmos-float {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.65;
+  }
+  25% {
+    transform: translate3d(12px, -20px, 0);
+    opacity: 1;
+  }
+  55% {
+    transform: translate3d(-8px, -34px, 0);
+    opacity: 0.8;
+  }
+  80% {
+    transform: translate3d(-16px, -12px, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.65;
+  }
+}
+
+/* --- Dark theme: dim everything onto the deep slate background --- */
+
+.dark .atmos-cloud-1 {
+  background: radial-gradient(
+    closest-side,
+    rgba(56, 189, 248, 0.08),
+    rgba(56, 189, 248, 0.025) 60%,
+    transparent
+  );
+}
+
+.dark .atmos-cloud-2 {
+  background: radial-gradient(
+    closest-side,
+    rgba(34, 197, 94, 0.06),
+    rgba(34, 197, 94, 0.02) 60%,
+    transparent
+  );
+}
+
+.dark .atmos-cloud-3 {
+  background: radial-gradient(
+    closest-side,
+    rgba(45, 212, 191, 0.06),
+    rgba(45, 212, 191, 0.02) 60%,
+    transparent
+  );
+}
+
+.dark .atmos-stream-1 {
+  border-top-color: rgba(56, 189, 248, 0.1);
+}
+
+.dark .atmos-stream-2 {
+  border-top-color: rgba(45, 212, 191, 0.09);
+}
+
+.dark .atmos-stream-3 {
+  border-top-color: rgba(34, 197, 94, 0.09);
+}
+
+.dark .atmos-particle--sky {
+  background: rgba(125, 211, 252, 0.3);
+}
+
+.dark .atmos-particle--emerald {
+  background: rgba(134, 239, 172, 0.26);
+}
+
+.dark .atmos-particle--teal {
+  background: rgba(94, 234, 212, 0.26);
+}
+
+/* --- Accessibility: freeze all motion --- */
+
+@media (prefers-reduced-motion: reduce) {
+  .atmosphere-backdrop,
+  .atmosphere-backdrop * {
+    animation: none !important;
+  }
+}

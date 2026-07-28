@@ -1,12 +1,9 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import {
-  getAirQualityLevelBadgeClass,
-  getAirQualityLevelColor,
-  getAirQualityLevelTextColor,
-  type MapStation,
-} from "@/lib/utils/readings";
+import { formatMetricValue, type MapStation } from "@/lib/utils/readings";
+import { evaluateAqi } from "@/lib/utils/aqi-standards";
+import { useAqiStandard } from "@/lib/preferences";
 import {
   Activity,
   ArrowRight,
@@ -16,6 +13,11 @@ import {
   MapPin,
   Thermometer,
 } from "lucide-react";
+import {
+  StatusBadge,
+  formatAbsoluteTimestamp,
+  freshnessStatus,
+} from "@/components/diagnostics/health-status";
 
 export interface StationExplorerEntry extends MapStation {
   description?: string | null;
@@ -31,16 +33,9 @@ interface StationExplorerCardProps {
   onViewAnalytics: (deviceId: string) => void;
 }
 
-function formatRecordedAt(iso?: string) {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+/** Best-known latest reading timestamp for a station entry. */
+function stationLastUpdated(station: StationExplorerEntry): string | null {
+  return station.recordedAt ?? station.lastSeenAt ?? null;
 }
 
 export function StationExplorerCard({
@@ -49,9 +44,8 @@ export function StationExplorerCard({
   onSelect,
   onViewAnalytics,
 }: StationExplorerCardProps) {
-  const aqiColor = getAirQualityLevelColor(station.airQualityLevel);
-  const aqiTextColor = getAirQualityLevelTextColor(station.airQualityLevel);
-  const statusClass = getAirQualityLevelBadgeClass(station.airQualityLevel);
+  const standard = useAqiStandard();
+  const aqi = evaluateAqi(standard, station.pm2_5);
 
   return (
     <article
@@ -76,42 +70,57 @@ export function StationExplorerCard({
       <div className="flex items-stretch gap-0 border-b border-border/60">
         <div
           className="flex w-[4.5rem] shrink-0 flex-col items-center justify-center py-4"
-          style={{ backgroundColor: aqiColor, color: aqiTextColor }}
+          style={{ backgroundColor: aqi.color, color: aqi.textColor }}
+          title={`${standard.name} — ${aqi.label}. ${standard.attribution} ${standard.methodology}`}
         >
-          <span className="text-2xl font-bold tabular-nums leading-none">{station.aqi}</span>
+          <span className="text-2xl font-bold tabular-nums leading-none">{aqi.display}</span>
           <span className="mt-1 text-[0.625rem] font-semibold uppercase tracking-wider opacity-90">
-            AQI
+            {standard.valueLabel}
           </span>
         </div>
         <div className="min-w-0 flex-1 px-4 py-3">
           <div className="flex items-start justify-between gap-2">
             <h3 className="truncate text-base font-bold text-foreground">{station.name}</h3>
-            <span className={cn("shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold", statusClass)}>
-              {station.status}
+            <span
+              className="shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold"
+              style={{ backgroundColor: `${aqi.color}1f`, color: aqi.color }}
+            >
+              {aqi.category?.shortLabel ?? aqi.label}
             </span>
           </div>
           {station.description && (
             <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{station.description}</p>
           )}
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            Updated {formatRecordedAt(station.recordedAt)}
+          <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <StatusBadge status={freshnessStatus(stationLastUpdated(station))} />
+            <span>Last updated: {formatAbsoluteTimestamp(stationLastUpdated(station))}</span>
           </p>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-4">
         {[
-          { label: "PM2.5", value: `${station.pm2_5.toFixed(1)}`, unit: "µg/m³", icon: Activity },
-          { label: "PM10", value: `${station.pm10_0.toFixed(1)}`, unit: "µg/m³", icon: Activity },
+          {
+            label: "PM1.0",
+            value: formatMetricValue(station.pm1_0),
+            unit: station.pm1_0 === null ? "" : "µg/m³",
+            icon: Activity,
+          },
+          {
+            label: "PM2.5",
+            value: formatMetricValue(station.pm2_5),
+            unit: station.pm2_5 === null ? "" : "µg/m³",
+            icon: Activity,
+          },
           {
             label: "Temp",
-            value: `${station.temperature.toFixed(1)}°C`,
+            value: station.temperature === null ? "—" : `${formatMetricValue(station.temperature)}°C`,
             unit: "",
             icon: Thermometer,
           },
           {
             label: "Humidity",
-            value: `${station.humidity.toFixed(1)}%`,
+            value: station.humidity === null ? "—" : `${formatMetricValue(station.humidity)}%`,
             unit: "",
             icon: Droplets,
           },
@@ -136,7 +145,7 @@ export function StationExplorerCard({
             e.stopPropagation();
             onViewAnalytics(station.deviceId);
           }}
-          className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#016fc4] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#015a9e]"
+          className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
         >
           Full analytics
           <ArrowRight className="h-3.5 w-3.5" aria-hidden />
@@ -165,6 +174,9 @@ export function StationDetailPanel({
   onViewAnalytics,
   onViewMap,
 }: StationDetailPanelProps) {
+  const standard = useAqiStandard();
+  const aqi = evaluateAqi(standard, station?.pm2_5 ?? null);
+
   if (!station) {
     return (
       <div className="flex h-full min-h-[16rem] flex-col items-center justify-center rounded-2xl border border-dashed border-border/80 bg-card/50 px-6 py-10 text-center">
@@ -177,13 +189,12 @@ export function StationDetailPanel({
     );
   }
 
-  const aqiColor = getAirQualityLevelColor(station.airQualityLevel);
   const canGoPrev = totalCount > 1 && currentIndex > 0;
   const canGoNext = totalCount > 1 && currentIndex < totalCount - 1;
 
   return (
     <div className="flex flex-col overflow-hidden rounded-2xl border border-border/80 bg-card shadow-sm">
-      <div className="px-5 py-4 text-white" style={{ backgroundColor: aqiColor }}>
+      <div className="px-5 py-4" style={{ backgroundColor: aqi.color, color: aqi.textColor }}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-90">
@@ -195,7 +206,9 @@ export function StationDetailPanel({
               )}
             </p>
             <h2 className="mt-1 truncate text-xl font-bold">{station.name}</h2>
-            <p className="mt-1 text-sm opacity-90">{station.status} · AQI {station.aqi}</p>
+            <p className="mt-1 text-sm opacity-90">
+              {aqi.label} · {standard.shortName} {aqi.display}
+            </p>
           </div>
           {totalCount > 1 && (
             <div className="flex shrink-0 items-center gap-1">
@@ -243,6 +256,15 @@ export function StationDetailPanel({
             <p className="text-[10px] font-semibold uppercase text-muted-foreground">Device status</p>
             <p className="mt-0.5 capitalize">{station.deviceStatus ?? "active"}</p>
           </div>
+          <div className="col-span-2 rounded-lg bg-muted/50 px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase text-muted-foreground">Last updated</p>
+            <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="tabular-nums">
+                {formatAbsoluteTimestamp(stationLastUpdated(station))}
+              </span>
+              <StatusBadge status={freshnessStatus(stationLastUpdated(station))} />
+            </p>
+          </div>
           {station.serialNumber && (
             <div className="col-span-2 rounded-lg bg-muted/50 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase text-muted-foreground">Serial number</p>
@@ -257,22 +279,48 @@ export function StationDetailPanel({
           </p>
           <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
             <div className="rounded-lg border border-border/60 px-3 py-2">
-              <dt className="text-xs text-muted-foreground">PM2.5</dt>
-              <dd className="font-bold tabular-nums">{station.pm2_5.toFixed(1)} µg/m³</dd>
+              <dt className="text-xs text-muted-foreground">PM1.0</dt>
+              <dd className="font-bold tabular-nums">
+                {station.pm1_0 === null ? "—" : `${formatMetricValue(station.pm1_0)} µg/m³`}
+              </dd>
             </div>
             <div className="rounded-lg border border-border/60 px-3 py-2">
-              <dt className="text-xs text-muted-foreground">PM10</dt>
-              <dd className="font-bold tabular-nums">{station.pm10_0.toFixed(1)} µg/m³</dd>
+              <dt className="text-xs text-muted-foreground">PM2.5</dt>
+              <dd className="font-bold tabular-nums">
+                {station.pm2_5 === null ? "—" : `${formatMetricValue(station.pm2_5)} µg/m³`}
+              </dd>
             </div>
             <div className="rounded-lg border border-border/60 px-3 py-2">
               <dt className="text-xs text-muted-foreground">Temperature</dt>
-              <dd className="font-bold tabular-nums">{station.temperature.toFixed(1)}°C</dd>
+              <dd className="font-bold tabular-nums">
+                {station.temperature === null ? "—" : `${formatMetricValue(station.temperature)}°C`}
+              </dd>
             </div>
             <div className="rounded-lg border border-border/60 px-3 py-2">
               <dt className="text-xs text-muted-foreground">Humidity</dt>
-              <dd className="font-bold tabular-nums">{station.humidity.toFixed(1)}%</dd>
+              <dd className="font-bold tabular-nums">
+                {station.humidity === null ? "—" : `${formatMetricValue(station.humidity)}%`}
+              </dd>
             </div>
           </dl>
+        </div>
+
+        {/*
+          The category shown in the header ("Unhealthy for Sensitive Groups" and
+          friends) is a standards body's wording — credit it, and say plainly
+          that our figure is a live reading rather than the averaged one the
+          published index is defined over.
+        */}
+        <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Index methodology
+          </p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+            {standard.attribution}
+          </p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+            {standard.methodology}
+          </p>
         </div>
       </div>
 
@@ -280,7 +328,7 @@ export function StationDetailPanel({
         <button
           type="button"
           onClick={() => onViewAnalytics(station.deviceId)}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#016fc4] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#015a9e]"
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
         >
           Open full analytics
           <ArrowRight className="h-4 w-4" />

@@ -5,15 +5,31 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import dynamic from "next/dynamic";
+import Image from "next/image";
+import Link from "next/link";
+import { SensorHousingVideo } from "@/components/landing/SensorHousingVideo";
+import { PhotoGallery } from "@/components/landing/PhotoGallery";
+import { FIELD_PHOTOS, LAB_PHOTOS } from "@/components/landing/photo-data";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ProfileButton } from "@/components/ProfileButton";
-import { MapPin, Thermometer, Droplets, BarChart3, ArrowRight, Activity, Sparkles, TrendingUp, Shield, Zap, Globe, Users, ImageIcon, Cpu, Menu } from "lucide-react";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { AtmosphereBackdrop } from "@/components/AtmosphereBackdrop";
+import { MapPin, Thermometer, Droplets, BarChart3, ArrowRight, Activity, Sparkles, TrendingUp, Shield, Zap, Globe, Users, ImageIcon, Cpu } from "lucide-react";
 import {
   fetchPublicDashboardData,
-  getAirQualityLevelBadgeClass,
+<<<<<<< HEAD
+  formatMetricValue,
+=======
+  normalizeAirQualityLevel,
+  calculateAQI,
+>>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
   type MapStation,
 } from "@/lib/utils/readings";
+import { evaluateAqi } from "@/lib/utils/aqi-standards";
+import { useAqiStandard } from "@/lib/preferences";
+import { getPublicStats } from "@/lib/api/stats";
+import type { PublicStats } from "@/lib/api/types";
 import { WeatherMark } from "@/components/WeatherMark";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
@@ -37,20 +53,30 @@ interface Station extends MapStation {}
 
 // Stations will be loaded from API
 
+<<<<<<< HEAD
+=======
 // Status badge colors from backend air_quality_level
 const getStatusColor = (status: string) => {
-  const badge = getAirQualityLevelBadgeClass(status);
-  const colorMap: Record<string, string> = {
-    "text-green-600 bg-green-50": "bg-green-100 text-green-800 border-green-300",
-    "text-yellow-600 bg-yellow-50": "bg-yellow-100 text-yellow-800 border-yellow-300",
-    "text-orange-600 bg-orange-50": "bg-orange-100 text-orange-800 border-orange-300",
-    "text-red-600 bg-red-50": "bg-red-100 text-red-800 border-red-300",
-    "text-purple-600 bg-purple-50": "bg-purple-100 text-purple-800 border-purple-300",
-    "text-purple-800 bg-purple-100": "bg-purple-200 text-purple-900 border-purple-400",
-  };
-  return colorMap[badge] ?? "bg-gray-100 text-gray-800 border-gray-300";
+  const level = normalizeAirQualityLevel(status);
+  switch (level) {
+    case "Good":
+      return "bg-green-100 text-green-800 border-green-300";
+    case "Moderate":
+      return "bg-yellow-100 text-yellow-800 border-yellow-300";
+    case "Unhealthy for Sensitive Groups":
+      return "bg-orange-100 text-orange-800 border-orange-300";
+    case "Unhealthy":
+      return "bg-red-100 text-red-800 border-red-300";
+    case "Very Unhealthy":
+      return "bg-purple-100 text-purple-800 border-purple-300";
+    case "Hazardous":
+      return "bg-purple-200 text-purple-900 border-purple-400";
+    default:
+      return "bg-gray-100 text-gray-800 border-gray-300";
+  }
 };
 
+>>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
 // Animated Counter Component
 function AnimatedCounter({ end, duration = 2000, suffix = "" }: { end: number; duration?: number; suffix?: string }) {
   const [count, setCount] = useState(0);
@@ -144,16 +170,12 @@ function FadeInOnScroll({ children, delay = 0 }: { children: React.ReactNode; de
 function SolidworksViewerPlaceholder() {
   return (
     <div className="w-full h-full rounded-xl border border-zinc-700 overflow-hidden relative bg-black">
-      <video
-        src="/Sensor%20housing%20Final.mp4"
-        className="w-full h-full object-cover"
-        autoPlay
-        loop
-        muted
-        playsInline
-        preload="none"
-        poster="/photo_2026-03-16_22-45-40.jpg"
-      />
+      {/*
+        play="visible": this sits below the fold, so it must not compete with
+        the hero for the same 1.4 MB file during first paint. It shows its
+        poster until scrolled to, then loads and plays.
+      */}
+      <SensorHousingVideo play="visible" className="w-full h-full object-cover" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 p-4 text-xs text-zinc-100/90 bg-gradient-to-t from-black/80 to-transparent">
         SolidWorks housing preview – final integration video (placeholder)
       </div>
@@ -165,7 +187,9 @@ export default function LandingPage() {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const [stations, setStations] = useState<Station[]>([]);
+  const standard = useAqiStandard();
   const [stationsLoading, setStationsLoading] = useState(true);
+  const [publicStats, setPublicStats] = useState<PublicStats | null>(null);
   const [stationsPage, setStationsPage] = useState(0);
   const [pcbSlide, setPcbSlide] = useState(0);
   const [pcbModalOpen, setPcbModalOpen] = useState(false);
@@ -195,6 +219,14 @@ export default function LandingPage() {
     };
 
     fetchStations();
+
+    // Landing counts come from the dedicated public stats endpoint rather than
+    // counting a full device/location fetch.
+    getPublicStats()
+      .then(setPublicStats)
+      .catch(() => {
+        /* non-fatal: fall back to stations.length below */
+      });
   }, []);
 
   useEffect(() => {
@@ -205,13 +237,19 @@ export default function LandingPage() {
     return () => window.clearInterval(interval);
   }, [heroMediaMode, heroMediaSlides.length]);
 
-  const handleGetStarted = () => {
-    if (isAuthenticated) {
-      router.push("/dashboard");
-    } else {
-      router.push("/login");
-    }
+  /**
+   * Route by auth state — but only once that state is actually known.
+   *
+   * `isAuthenticated` is false both when signed out and while /auth/me is still
+   * in flight, so acting on it during validation sent signed-in visitors to the
+   * login page. Every CTA on this page goes through here.
+   */
+  const goToApp = (path: string) => {
+    if (isLoading) return;
+    router.push(isAuthenticated ? path : "/login");
   };
+
+  const handleGetStarted = () => goToApp("/dashboard");
 
   const scrollToId = (id: string) => {
     if (typeof window === "undefined") return;
@@ -223,19 +261,32 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen text-foreground overflow-x-hidden relative">
-      {/* Light gray grid background */}
+      {/* Atmospheric backdrop: drifting clouds, wind streams, floating particles */}
+      <AtmosphereBackdrop />
       {/* Header */}
       <header className="sticky top-0 z-50 w-full border-b border-ring bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/80 transition-all duration-300">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex h-16 items-center justify-between">
-              <div className="flex items-center gap-3 animate-fade-in">
+              {/*
+                Logo and wordmark are one link home — the convention every
+                visitor already expects from a site header.
+
+                The wordmark is a <span>, not an <h1>: it used to be a heading,
+                which gave the page two, and crawlers take the first as the
+                page's topic. The one <h1> lives in the hero.
+              */}
+              <Link
+                href="/"
+                aria-label="Addis Air Net — home"
+                className="flex items-center gap-3 animate-fade-in rounded-lg transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
                 <div className="p-2 rounded-lg border border-ring bg-ring text-background shadow-sm">
                   <Activity className="h-5 w-5" />
                 </div>
-                <h1 className="text-xl font-semibold tracking-tight text-primary">
-                  Air Quality Monitor
-                </h1>
-              </div>
+                <span className="text-xl font-semibold tracking-tight text-primary">
+                  Addis Air Net
+                </span>
+              </Link>
             <nav className="hidden md:flex items-center gap-8">
               <button
                 onClick={() => scrollToId("map")}
@@ -275,6 +326,7 @@ export default function LandingPage() {
               </button>
             </nav>
             <div className="flex items-center gap-3">
+              <ThemeToggle />
               {isAuthenticated ? (
                 <>
                   <Button
@@ -389,13 +441,10 @@ export default function LandingPage() {
       <section aria-label="Product media" className="relative w-full">
         <div className="relative w-full h-[280px] sm:h-[420px] lg:h-[560px] overflow-hidden border-y border-slate-200 bg-black">
           {heroMediaMode === "video" ? (
-            <video
-              src="/Sensor%20housing%20Final.mp4"
+            <SensorHousingVideo
               className="absolute inset-0 w-full h-full object-cover"
-              autoPlay
-              loop
-              muted
-              playsInline
+              play="eager"
+              poster={false}
               onError={() => setHeroMediaMode("slideshow")}
             />
           ) : (
@@ -428,8 +477,16 @@ export default function LandingPage() {
                       <span>Real‑time air quality for real cities</span>
                     </div>
 
+                    {/*
+                      The page's single <h1>, and the strongest on-page signal
+                      of what this page is about. It previously read "Air
+                      quality, made visible." — evocative, but with no place
+                      name in it, so it matched nothing anyone actually
+                      searches. The city and country now lead; the original
+                      line survives as the second clause.
+                    */}
                     <h1 className="mt-4 text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-white drop-shadow">
-                      <span className="block">Air quality,</span>
+                      <span className="block">Addis Ababa air quality,</span>
                       <span className="block text-white/95">made visible.</span>
                     </h1>
 
@@ -437,11 +494,19 @@ export default function LandingPage() {
                       Monitor air quality across{" "}
                       <span className="font-semibold text-white">Addis Ababa</span> with real‑time data from{" "}
                       <span className="font-bold text-white">
-                        {stationsLoading ? (
+<<<<<<< HEAD
+                        {stationsLoading && !publicStats ? (
                           "0+"
                         ) : (
                           <>
-                            <AnimatedCounter end={stations.length} suffix="+" />{" "}
+                            <AnimatedCounter end={publicStats?.stations ?? stations.length} suffix="+" />{" "}
+=======
+                        {stationsLoading ? (
+                          "0"
+                        ) : (
+                          <>
+                            <AnimatedCounter end={stations.length} />{" "}
+>>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
                           </>
                         )}
                       </span>{" "}
@@ -452,16 +517,16 @@ export default function LandingPage() {
                       <Button
                         onClick={handleGetStarted}
                         size="lg"
-                        className="bg-purple-600 text-white hover:bg-purple-700 shadow-2xl shadow-black/30 h-12 px-6"
+                        className="shadow-2xl shadow-black/30 h-12 px-6"
                       >
                         {isAuthenticated ? "Go to Dashboard" : "Log in to Dashboard"}
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Button>
                       <Button
-                        onClick={() => scrollToId("map")}
+                        onClick={() => goToApp("/dashboard")}
                         variant="outline"
                         size="lg"
-                        className="h-12 px-6 bg-transparent hover:bg-transparent border-purple-200/80 text-purple-200 font-extrabold tracking-wide hover:text-purple-100 hover:border-purple-200"
+                        className="h-12 px-6 bg-transparent hover:bg-transparent border-sky-200/80 text-sky-200 font-extrabold tracking-wide hover:text-sky-100 hover:border-sky-200"
                       >
                         Explore Map
                       </Button>
@@ -545,23 +610,23 @@ export default function LandingPage() {
       </section>
 
       {/* New users strip */}
-      <section aria-label="New users" className="w-full border-b border-slate-200 bg-white/90">
+      <section aria-label="New users" className="w-full border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
-              <p className="text-sm text-slate-700">
-                <span className="font-extrabold text-purple-700">New users:</span>{" "}
-                Sign in, open the live map, then select a station to see air quality level, PM2.5/PM10, temperature, and humidity.
+              <p className="text-sm text-slate-700 dark:text-slate-300">
+                <span className="font-extrabold text-primary">New users:</span>{" "}
+                Sign in, open the live map, then select a station to see air quality level, PM1.0/PM2.5, temperature, and humidity.
               </p>
-              <p className="text-xs text-slate-500">
-                Tip: start with stations marked <span className="font-semibold text-slate-700">Good</span> or{" "}
-                <span className="font-semibold text-slate-700">Moderate</span> to compare trends.
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Tip: start with stations marked <span className="font-semibold text-slate-700 dark:text-slate-300">Good</span> or{" "}
+                <span className="font-semibold text-slate-700 dark:text-slate-300">Moderate</span> to compare trends.
               </p>
             </div>
             <Button
               onClick={() => router.push("/getting-started")}
               variant="outline"
-              className="border-purple-200 text-purple-700 font-extrabold bg-transparent hover:bg-purple-50"
+              className="border-sky-200 text-primary font-extrabold bg-transparent hover:bg-sky-50"
             >
               New user guide
               <ArrowRight className="ml-2 h-4 w-4" />
@@ -574,29 +639,42 @@ export default function LandingPage() {
       <section className="container mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <FadeInOnScroll>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-5 rounded-xl bg-white border border-slate-200 hover:border-slate-900/70 transition-all duration-300 hover:shadow-lg">
-              <div className="text-2xl md:text-3xl font-bold text-slate-900 mb-1">
+            <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-300 hover:shadow-lg">
+              <div className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">
                 <AnimatedCounter end={24} suffix="/7" />
               </div>
-              <div className="text-xs text-slate-500">Real‑time monitoring</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">Real‑time monitoring</div>
             </div>
+<<<<<<< HEAD
+            <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-300 hover:shadow-lg">
+              <div className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">
+                {stationsLoading && !publicStats ? <span className="text-base">Loading…</span> : <AnimatedCounter end={publicStats?.stations ?? stations.length} suffix="+" />}
+=======
             <div className="p-5 rounded-xl bg-white border border-slate-200 hover:border-slate-900/70 transition-all duration-300 hover:shadow-lg">
               <div className="text-2xl md:text-3xl font-bold text-slate-900 mb-1">
-                {stationsLoading ? <span className="text-base">Loading…</span> : <AnimatedCounter end={stations.length} suffix="+" />}
+                {stationsLoading ? <span className="text-base">Loading…</span> : <AnimatedCounter end={stations.length} />}
+>>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
               </div>
-              <div className="text-xs text-slate-500">Monitoring stations</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">Monitoring stations</div>
             </div>
-            <div className="p-5 rounded-xl bg-white border border-slate-200 hover:border-slate-900/70 transition-all duration-300 hover:shadow-lg">
-              <div className="text-2xl md:text-3xl font-bold text-slate-900 mb-1">
-                <AnimatedCounter end={4} />
+            <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-300 hover:shadow-lg">
+              <div className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">
+                {/*
+                  Comes from /public/stats, where it is derived from the reading
+                  schema — add a sensor field and this follows on its own. The
+                  literal is only a fallback for a slow or older API; it was
+                  hardcoded to 4 for a long time, which counted what the public
+                  dashboard *displays* rather than what the network collects.
+                */}
+                <AnimatedCounter end={publicStats?.parameters_tracked ?? 14} />
               </div>
-              <div className="text-xs text-slate-500">Parameters tracked</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">Parameters tracked</div>
             </div>
-            <div className="p-5 rounded-xl bg-white border border-slate-200 hover:border-slate-900/70 transition-all duration-300 hover:shadow-lg">
-              <div className="text-2xl md:text-3xl font-bold text-slate-900 mb-1">
+            <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-300 hover:shadow-lg">
+              <div className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">
                 <AnimatedCounter end={99} suffix="%" />
               </div>
-              <div className="text-xs text-slate-500">Data confidence</div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">Data confidence</div>
             </div>
           </div>
         </FadeInOnScroll>
@@ -608,24 +686,21 @@ export default function LandingPage() {
           <div className="text-center mb-16">
             <div className="inline-flex items-center gap-2 mb-4">
               <Globe className="h-6 w-6 text-primary animate-spin-slow" />
+              {/* Section headings carry the query terms, not just brand voice. */}
               <h2 className="text-4xl md:text-5xl font-bold text-primary">
-                Interactive Air Quality Map
+                Live air quality map of Addis Ababa
               </h2>
             </div>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto mb-6">
-              Explore real-time air quality data from monitoring stations across the city. 
-              Click on any marker to view detailed readings.
+            <p className="text-lg text-slate-600 dark:text-slate-400 max-w-2xl mx-auto mb-6">
+              Real-time PM2.5 and PM1.0 readings from monitoring stations across
+              Addis Ababa. Click any station for its latest measurements, and
+              switch between the US EPA, European EAQI, UK DAQI and WHO 2021
+              air quality standards from the top-left of the map.
             </p>
             <Button
-              onClick={() => {
-                if (isAuthenticated) {
-                  router.push("/dashboard");
-                } else {
-                  router.push("/login");
-                }
-              }}
+              onClick={() => goToApp("/dashboard")}
               size="lg"
-              className="bg-slate-900 text-white hover:bg-slate-800 transition-all duration-300 hover:scale-105"
+              className="bg-slate-900 dark:bg-slate-700 text-white hover:bg-slate-800 dark:hover:bg-slate-600 transition-all duration-300 hover:scale-105"
             >
               View full map
               <ArrowRight className="ml-2 h-4 w-4" />
@@ -634,7 +709,7 @@ export default function LandingPage() {
         </FadeInOnScroll>
         
         <FadeInOnScroll delay={200}>
-          <div className="h-[500px] md:h-[600px] rounded-xl shadow-2xl border border-slate-200 bg-slate-50 hover:shadow-slate-400/20 transition-all duration-500">
+          <div className="h-[500px] md:h-[600px] rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 hover:shadow-slate-400/20 transition-all duration-500">
             <Map stations={stations} loading={stationsLoading} />
           </div>
         </FadeInOnScroll>
@@ -643,7 +718,7 @@ export default function LandingPage() {
       {/* Hardware & 3D Design Section */}
       <section
         id="hardware"
-        className="relative container mx-auto px-4 sm:px-6 lg:px-8 py-20 border-y border-slate-200/90 bg-white/80"
+        className="relative container mx-auto px-4 sm:px-6 lg:px-8 py-20 border-y border-slate-200/90 dark:border-slate-800/90 bg-white/80 dark:bg-slate-900/80"
       >
         <FadeInOnScroll>
           <div className="flex flex-col lg:flex-row items-start gap-12">
@@ -655,36 +730,36 @@ export default function LandingPage() {
               <h2 className="text-4xl md:text-5xl font-bold text-accent">
                 From PCB layout to 3D air stations.
               </h2>
-              <p className="text-lg text-slate-600 leading-relaxed">
+              <p className="text-lg text-slate-600 dark:text-slate-400 leading-relaxed">
                 We treat the hardware as seriously as the data. This section will embed live 3D
                 views of your PCB and enclosure, so collaborators can spin, zoom, and inspect the
                 design directly in the browser.
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 text-sm text-slate-700">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 text-sm text-slate-700 dark:text-slate-300">
                 <div className="space-y-1">
-                  <p className="font-semibold text-slate-900">PCB</p>
-                  <p className="text-slate-500">
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">PCB</p>
+                  <p className="text-slate-500 dark:text-slate-400">
                     KiCad / Altium board exported as 3D model and rendered via{" "}
-                    <span className="font-mono text-slate-900">@react-three/fiber</span>.
+                    <span className="font-mono text-slate-900 dark:text-slate-100">@react-three/fiber</span>.
                   </p>
                 </div>
                 <div className="space-y-1">
-                  <p className="font-semibold text-slate-900">Mechanical</p>
-                  <p className="text-slate-500">
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">Mechanical</p>
+                  <p className="text-slate-500 dark:text-slate-400">
                     SolidWorks / STEP enclosure visualized with{" "}
-                    <span className="font-mono text-slate-900">@react-three/drei</span> for orbit and
+                    <span className="font-mono text-slate-900 dark:text-slate-100">@react-three/drei</span> for orbit and
                     lighting.
                   </p>
                 </div>
               </div>
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
                 Coming soon – plug actual 3D assets into these viewers.
               </p>
             </div>
             <div className="flex-1 grid grid-cols-1 gap-6">
               <FadeInOnScroll>
                 <div
-                  className="h-64 md:h-72 rounded-xl border border-slate-200 bg-slate-900/5 overflow-hidden relative cursor-pointer group"
+                  className="h-64 md:h-72 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-900/5 dark:bg-slate-100/5 overflow-hidden relative cursor-pointer group"
                   onClick={() => setPcbModalOpen(true)}
                 >
                   {/* PCB slideshow */}
@@ -763,7 +838,7 @@ export default function LandingPage() {
 
       {/* Sensors Section */}
       <section id="sensors" className="relative container mx-auto px-4 sm:px-6 lg:px-8 py-20">
-        <div className="absolute inset-0 -z-10 bg-gradient-to-b from-white via-slate-50 to-white" />
+        <div className="absolute inset-0 -z-10 bg-gradient-to-b from-white dark:from-slate-950 via-slate-50 dark:via-slate-900 to-white dark:to-slate-950" />
         <FadeInOnScroll>
           <div className="mb-10 flex flex-col md:flex-row md:items-end md:justify-between gap-6 relative">
             <div className="text-left">
@@ -773,7 +848,7 @@ export default function LandingPage() {
                   Monitoring stations
                 </h2>
               </div>
-              <p className="text-sm md:text-base text-slate-600 max-w-xl">
+              <p className="text-sm md:text-base text-slate-600 dark:text-slate-400 max-w-xl">
                 Live view of every station included in the KPI map – scroll through the carousel to
                 see current conditions at each device.
               </p>
@@ -784,7 +859,7 @@ export default function LandingPage() {
                   type="button"
                   onClick={() => setStationsPage((prev) => Math.max(prev - 1, 0))}
                   disabled={stationsPage === 0}
-                  className="h-10 w-10 rounded-full flex items-center justify-center bg-slate-900 text-white text-lg font-bold shadow-md hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-slate-900 transition-colors"
+                  className="h-10 w-10 rounded-full flex items-center justify-center bg-slate-900 dark:bg-slate-700 text-white text-lg font-bold shadow-md hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-40 disabled:hover:bg-slate-900 dark:disabled:hover:bg-slate-700 transition-colors"
                   aria-label="Previous stations"
                 >
                   <span className="leading-none">‹</span>
@@ -797,7 +872,7 @@ export default function LandingPage() {
                     setStationsPage((prev) => Math.min(prev + 1, maxPage));
                   }}
                   disabled={stations.length <= 3 || (stationsPage + 1) * 3 >= stations.length}
-                  className="h-10 w-10 rounded-full flex items-center justify-center bg-slate-900 text-white text-lg font-bold shadow-md hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-slate-900 transition-colors"
+                  className="h-10 w-10 rounded-full flex items-center justify-center bg-slate-900 dark:bg-slate-700 text-white text-lg font-bold shadow-md hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-40 disabled:hover:bg-slate-900 dark:disabled:hover:bg-slate-700 transition-colors"
                   aria-label="Next stations"
                 >
                   <span className="leading-none">›</span>
@@ -826,75 +901,96 @@ export default function LandingPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 transition-transform duration-500">
                 {stations
                   .slice(stationsPage * 3, stationsPage * 3 + 3)
-                  .map((station, index) => (
+                  .map((station, index) => {
+                    const aqi = evaluateAqi(standard, station.pm2_5);
+                    return (
                     <FadeInOnScroll key={station.id} delay={index * 100}>
-                      <Card className="border-2 border-slate-200 hover:shadow-2xl hover:border-slate-900/70 transition-all duration-500 hover:-translate-y-2 bg-white/90 backdrop-blur-sm group">
+                      <Card className="border-2 border-slate-200 dark:border-slate-800 hover:shadow-2xl hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-500 hover:-translate-y-2 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm group">
                         <CardHeader>
                           <div className="flex items-start justify-between mb-2">
                             <div className="flex items-center gap-2">
-                              <div className="p-1.5 rounded-md bg-slate-100 group-hover:bg-slate-200 transition-colors">
-                                <MapPin className="h-4 w-4 text-slate-900 group-hover:scale-110 transition-transform" />
+                              <div className="p-1.5 rounded-md bg-slate-100 dark:bg-slate-800 group-hover:bg-slate-200 dark:group-hover:bg-slate-700 transition-colors">
+                                <MapPin className="h-4 w-4 text-slate-900 dark:text-slate-100 group-hover:scale-110 transition-transform" />
                               </div>
                               <CardTitle className="text-lg font-bold">{station.name}</CardTitle>
                             </div>
                             <span
-                              className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${getStatusColor(
-                                station.status
-                              )} animate-pulse-subtle`}
+                              className="px-2.5 py-1 rounded-full text-xs font-semibold border animate-pulse-subtle"
+                              style={{
+                                backgroundColor: `${aqi.color}1f`,
+                                borderColor: `${aqi.color}59`,
+                                color: aqi.color,
+                              }}
                             >
-                              {station.status}
+                              {aqi.category?.shortLabel ?? aqi.label}
                             </span>
                           </div>
-                          <CardDescription className="text-sm text-slate-600">
+<<<<<<< HEAD
+                          <CardDescription
+                            className="text-sm text-slate-600 dark:text-slate-400"
+                            title={`${standard.attribution} ${standard.methodology}`}
+                          >
                             Air quality:{" "}
-                            <span className="font-semibold text-slate-900">
-                              {station.airQualityLevel}
-                            </span>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">{aqi.label}</span>
                             {" · "}
+                            {standard.shortName}{" "}
+                            <span className="font-semibold text-slate-900 dark:text-slate-100 text-lg">
+                              {aqi.display}
+=======
+                          <CardDescription className="text-sm text-slate-600">
                             AQI{" "}
                             <span className="font-semibold text-slate-900 text-lg">
                               {station.aqi}
+>>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
                             </span>
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                           <div className="grid grid-cols-2 gap-4 text-sm">
                             <div className="space-y-1 group/item">
-                              <div className="flex items-center gap-1.5 text-slate-500">
-                                <Activity className="h-3.5 w-3.5 group-hover/item:text-slate-900 transition-colors" />
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                                <Activity className="h-3.5 w-3.5 group-hover/item:text-slate-900 dark:group-hover/item:text-slate-100 transition-colors" />
+                                <span className="text-xs">PM1.0</span>
+                              </div>
+                              <p className="font-bold text-slate-900 dark:text-slate-100 text-base">
+                                {formatMetricValue(station.pm1_0)}{" "}
+                                {station.pm1_0 !== null && (
+                                  <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">µg/m³</span>
+                                )}
+                              </p>
+                            </div>
+                            <div className="space-y-1 group/item">
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                                <Activity className="h-3.5 w-3.5 group-hover/item:text-slate-900 dark:group-hover/item:text-slate-100 transition-colors" />
                                 <span className="text-xs">PM2.5</span>
                               </div>
-                              <p className="font-bold text-slate-900 text-base">
-                                {station.pm2_5.toFixed(1)}{" "}
-                                <span className="text-xs text-slate-500 font-normal">µg/m³</span>
+                              <p className="font-bold text-slate-900 dark:text-slate-100 text-base">
+                                {formatMetricValue(station.pm2_5)}{" "}
+                                {station.pm2_5 !== null && (
+                                  <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">µg/m³</span>
+                                )}
                               </p>
                             </div>
                             <div className="space-y-1 group/item">
-                              <div className="flex items-center gap-1.5 text-slate-500">
-                                <Activity className="h-3.5 w-3.5 group-hover/item:text-slate-900 transition-colors" />
-                                <span className="text-xs">PM10</span>
-                              </div>
-                              <p className="font-bold text-slate-900 text-base">
-                                {station.pm10_0.toFixed(1)}{" "}
-                                <span className="text-xs text-slate-500 font-normal">µg/m³</span>
-                              </p>
-                            </div>
-                            <div className="space-y-1 group/item">
-                              <div className="flex items-center gap-1.5 text-slate-500">
-                                <Thermometer className="h-3.5 w-3.5 group-hover/item:text-slate-900 transition-colors" />
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                                <Thermometer className="h-3.5 w-3.5 group-hover/item:text-slate-900 dark:group-hover/item:text-slate-100 transition-colors" />
                                 <span className="text-xs">Temp</span>
                               </div>
-                              <p className="font-bold text-slate-900 text-base">
-                                {station.temperature.toFixed(1)}°C
+                              <p className="font-bold text-slate-900 dark:text-slate-100 text-base">
+                                {station.temperature === null
+                                  ? "—"
+                                  : `${formatMetricValue(station.temperature)}°C`}
                               </p>
                             </div>
                             <div className="space-y-1 group/item">
-                              <div className="flex items-center gap-1.5 text-slate-500">
-                                <Droplets className="h-3.5 w-3.5 group-hover/item:text-slate-900 transition-colors" />
+                              <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                                <Droplets className="h-3.5 w-3.5 group-hover/item:text-slate-900 dark:group-hover/item:text-slate-100 transition-colors" />
                                 <span className="text-xs">Humidity</span>
                               </div>
-                              <p className="font-bold text-slate-900 text-base">
-                                {station.humidity.toFixed(1)}%
+                              <p className="font-bold text-slate-900 dark:text-slate-100 text-base">
+                                {station.humidity === null
+                                  ? "—"
+                                  : `${formatMetricValue(station.humidity)}%`}
                               </p>
                             </div>
                           </div>
@@ -902,14 +998,8 @@ export default function LandingPage() {
                             <Button
                               variant="outline"
                               size="sm"
-                              className="w-full border-slate-300 text-slate-700 hover:border-slate-900 hover:text-slate-900"
-                              onClick={() => {
-                                if (isAuthenticated) {
-                                  router.push(`/sensors?device=${station.deviceId}`);
-                                } else {
-                                  router.push("/login");
-                                }
-                              }}
+                              className="w-full border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-slate-900 dark:hover:border-slate-100 hover:text-slate-900 dark:hover:text-slate-100"
+                              onClick={() => goToApp(`/sensors?device=${station.deviceId}`)}
                             >
                               View sensor details
                               <ArrowRight className="ml-2 h-3.5 w-3.5" />
@@ -918,7 +1008,8 @@ export default function LandingPage() {
                         </CardContent>
                       </Card>
                     </FadeInOnScroll>
-                  ))}
+                    );
+                  })}
               </div>
             </div>
             {stations.length > 3 && (
@@ -930,8 +1021,10 @@ export default function LandingPage() {
                     onClick={() => setStationsPage(i)}
                     className={`h-3 w-6 rounded-full border transition-colors ${
                       i === stationsPage
-                        ? "bg-slate-900 border-slate-900"
-                        : "bg-slate-200 border-slate-300 hover:bg-slate-400 hover:border-slate-500"
+                        // Active dot inverts on dark so it stays distinguishable
+                        // from the inactive ones against the deep-slate page.
+                        ? "bg-slate-900 dark:bg-slate-100 border-slate-900 dark:border-slate-100"
+                        : "bg-slate-200 dark:bg-slate-700 border-slate-300 dark:border-slate-600 hover:bg-slate-400 dark:hover:bg-slate-500 hover:border-slate-500 dark:hover:border-slate-400"
                     }`}
                     aria-label={`Go to stations slide ${i + 1}`}
                   />
@@ -952,7 +1045,7 @@ export default function LandingPage() {
                 Comprehensive Air Quality Data
               </h2>
             </div>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+            <p className="text-lg text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
               Track multiple air quality parameters in real-time with advanced analytics and insights
             </p>
           </div>
@@ -963,8 +1056,8 @@ export default function LandingPage() {
             {
               icon: Activity,
               title: "Particulate Matter",
-              description: "PM2.5 & PM10",
-              content: "Fine particles that can penetrate deep into the lungs and enter the bloodstream. Monitor PM2.5 and PM10 levels to assess air quality risks.",
+              description: "PM1.0 & PM2.5",
+              content: "Fine particles that can penetrate deep into the lungs and enter the bloodstream. Monitor PM1.0 and PM2.5 levels to assess air quality risks.",
               color: "primary",
             },
             {
@@ -978,7 +1071,7 @@ export default function LandingPage() {
               icon: BarChart3,
               title: "Air Quality Index",
               description: "AQI Ratings",
-              content: "The AQI provides a standardized way to understand air quality levels, from Good to Hazardous, helping you make informed decisions.",
+              content: "Readings are reported against a published index of your choosing — US EPA, the EEA's European AQI, UK DAQI or the WHO 2021 guidelines — selectable from the map. Categories and thresholds belong to those bodies; our figures are live PM2.5 rather than the 24-hour averages they define.",
               color: "chart-3",
             },
             {
@@ -992,25 +1085,25 @@ export default function LandingPage() {
               icon: Globe,
               title: "Live Monitoring",
               description: "Real-time KPIs",
-              content: "Public dashboard shows PM2.5, PM10, temperature, and humidity from every active station. Sign in for full research data including VOC and NOx.",
+              content: "Public dashboard shows PM1.0, PM2.5, temperature, and humidity from every active station. Sign in for full research data including PM4.0, PM10, particle number concentrations, VOC and NOx.",
               color: "chart-2",
             },
           ].map((item, index) => (
             <FadeInOnScroll key={index} delay={index * 100}>
-              <Card className="border-2 border-slate-200 hover:shadow-2xl hover:border-slate-900/70 transition-all duration-500 hover:-translate-y-2 bg-white/90 backdrop-blur-sm group">
+              <Card className="border-2 border-slate-200 dark:border-slate-800 hover:shadow-2xl hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-500 hover:-translate-y-2 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm group">
                 <CardHeader>
                   <div className="flex items-center gap-4">
-                    <div className="p-3 rounded-xl bg-slate-100 group-hover:scale-110 transition-transform duration-300">
-                      <item.icon className="h-6 w-6 text-slate-900 group-hover:rotate-12 transition-transform duration-300" />
+                    <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 group-hover:scale-110 transition-transform duration-300">
+                      <item.icon className="h-6 w-6 text-slate-900 dark:text-slate-100 group-hover:rotate-12 transition-transform duration-300" />
                     </div>
                     <div>
-                      <CardTitle className="text-lg text-slate-900">{item.title}</CardTitle>
-                      <CardDescription className="text-slate-500">{item.description}</CardDescription>
+                      <CardTitle className="text-lg text-slate-900 dark:text-slate-100">{item.title}</CardTitle>
+                      <CardDescription className="text-slate-500 dark:text-slate-400">{item.description}</CardDescription>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm text-slate-600 leading-relaxed">
+                  <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
                     {item.content}
                   </p>
                 </CardContent>
@@ -1023,44 +1116,29 @@ export default function LandingPage() {
       {/* Photo Journey Section */}
       <section
         id="photos"
-        className="container mx-auto px-4 sm:px-6 lg:px-8 py-20 border-y border-slate-200/90 bg-white/80"
+        className="container mx-auto px-4 sm:px-6 lg:px-8 py-20 border-y border-slate-200/90 dark:border-slate-800/90 bg-white/80 dark:bg-slate-900/80"
       >
         <FadeInOnScroll>
-          <div className="flex flex-col lg:flex-row items-start gap-10">
-            <div className="flex-1 space-y-4">
-              <div className="inline-flex items-center gap-2 mb-2 text-xs font-semibold tracking-[0.18em] uppercase text-accent">
-                <ImageIcon className="h-4 w-4 text-accent" />
-                <span>Field Photos</span>
-              </div>
-              <h2 className="text-3xl md:text-4xl font-bold text-accent">
-                Stations in streets, rooftops, and traffic.
-              </h2>
-              <p className="text-lg text-slate-600 leading-relaxed">
-                Use this area as a visual story: deployment days, installation details, calibration
-                work, and the people around the stations. It mirrors what other mature air quality
-                platforms show – not just charts, but how the hardware lives in the real world.
-              </p>
-              <ul className="text-sm text-slate-500 space-y-1 list-disc list-inside">
-                <li>Close‑ups of the PCB and sensor modules.</li>
-                <li>Photos of stations on lamp posts and buildings.</li>
-                <li>City‑scale shots that connect context to data.</li>
-              </ul>
+          {/*
+            Heading above, photos full width below — not a text/photo split.
+            The copy here is three lines and the gallery is tall, so side-by-side
+            left half the section as empty column.
+          */}
+          <div className="mx-auto mb-10 max-w-3xl text-center">
+            <div className="mb-3 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
+              <ImageIcon className="h-4 w-4 text-accent" />
+              <span>Field Photos</span>
             </div>
-            <div className="flex-1 grid grid-cols-2 gap-4">
-              <div className="aspect-[4/3] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center p-3 text-xs text-slate-500">
-                Deployment photo
-              </div>
-              <div className="aspect-[4/3] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center p-3 text-xs text-slate-500">
-                Enclosure detail shot
-              </div>
-              <div className="aspect-[4/3] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center p-3 text-xs text-slate-500">
-                City‑scale street scene
-              </div>
-              <div className="aspect-[4/3] rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center p-3 text-xs text-slate-500">
-                Lab / calibration setup
-              </div>
-            </div>
+            <h2 className="text-3xl font-bold text-accent md:text-4xl">
+              Stations in streets, rooftops, and traffic.
+            </h2>
+            <p className="mt-4 text-lg leading-relaxed text-slate-600 dark:text-slate-400">
+              Every station on the map was carried up a ladder by someone. These are the
+              deployment days — mounting enclosures above the traffic they measure, bolting
+              units to columns and canopies, and configuring each one before it goes up.
+            </p>
           </div>
+          <PhotoGallery photos={FIELD_PHOTOS} />
         </FadeInOnScroll>
       </section>
 
@@ -1072,7 +1150,7 @@ export default function LandingPage() {
               <Users className="h-6 w-6 text-primary" />
               <h2 className="text-4xl md:text-5xl font-bold text-primary">The team behind the air.</h2>
             </div>
-            <p className="text-lg text-slate-600">
+            <p className="text-lg text-slate-600 dark:text-slate-400">
               Highlight researchers, engineers, and partners – similar to leading air quality
               platforms that show credibility through the people involved.
             </p>
@@ -1095,19 +1173,35 @@ export default function LandingPage() {
                 name: "Partner / Lab",
                 role: "Research Partner",
                 blurb: "Validates measurements, calibrates sensors, and co‑authors insights.",
-                image: "",
+                image: LAB_PHOTOS[0]?.src ?? "",
+                // The card overlays the name on the photo, so `name` makes a
+                // poor alt — it describes the role, not the picture. Carry the
+                // real description from the photo data instead.
+                imageAlt: LAB_PHOTOS[0]?.alt,
+                // Wide bench shot squared off: bias upward to keep the work on
+                // the table in frame rather than the floor.
+                imageFocus: "center 35%",
               },
             ].map((member, idx) => (
               <FadeInOnScroll key={member.name} delay={idx * 100}>
                 <div className="group relative h-full rounded-2xl bg-gradient-to-br from-emerald-200 via-slate-200 to-sky-200 p-px transition-all duration-500 hover:-translate-y-1.5 hover:from-emerald-400 hover:via-teal-300 hover:to-sky-400 hover:shadow-[0_24px_48px_-16px_rgba(16,185,129,0.35)]">
-                  <div className="relative flex h-full flex-col overflow-hidden rounded-[calc(1rem-1px)] bg-white">
+                  <div className="relative flex h-full flex-col overflow-hidden rounded-[calc(1rem-1px)] bg-white dark:bg-slate-900">
                     <div className="pointer-events-none absolute -right-16 -top-16 z-10 h-40 w-40 rounded-full bg-emerald-200/50 opacity-0 blur-3xl transition-opacity duration-500 group-hover:opacity-100" />
                     {member.image ? (
-                      <div className="relative overflow-hidden">
-                        <img
+                      <div className="relative aspect-square w-full overflow-hidden">
+                        {/*
+                          next/image so this 2 MB PNG is resized and served as
+                          AVIF/WebP at the size the card actually renders, rather
+                          than shipped whole. `fill` + the parent's aspect-square
+                          keeps the original object-cover framing.
+                        */}
+                        <Image
                           src={member.image}
-                          alt={member.name}
-                          className="aspect-square w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                          alt={member.imageAlt ?? member.name}
+                          fill
+                          sizes="(max-width: 768px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                          style={{ objectPosition: member.imageFocus ?? "center" }}
+                          className="object-cover transition-transform duration-700 ease-out group-hover:scale-105"
                         />
                         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/15 to-transparent" />
                         <div className="absolute inset-x-0 bottom-0 p-5">
@@ -1118,10 +1212,10 @@ export default function LandingPage() {
                         </div>
                       </div>
                     ) : (
-                      <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-gradient-to-br from-emerald-50 via-white to-sky-50">
+                      <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-gradient-to-br from-emerald-50 dark:from-emerald-950 via-white dark:via-slate-900 to-sky-50 dark:to-sky-950">
                         <div className="absolute h-40 w-40 rounded-full border border-emerald-200/80 transition-transform duration-700 group-hover:scale-125" />
                         <div className="absolute h-56 w-56 rounded-full border border-emerald-100/70 transition-transform duration-700 group-hover:scale-110" />
-                        <div className="relative flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-2xl font-bold text-white shadow-lg shadow-emerald-500/40 ring-4 ring-white transition-transform duration-500 group-hover:scale-110">
+                        <div className="relative flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-2xl font-bold text-white shadow-lg shadow-emerald-500/40 ring-4 ring-white dark:ring-slate-900 transition-transform duration-500 group-hover:scale-110">
                           {member.name
                             .split(" ")
                             .filter(Boolean)
@@ -1130,14 +1224,14 @@ export default function LandingPage() {
                             .join("") || "AQ"}
                         </div>
                         <div className="absolute inset-x-0 bottom-0 p-5">
-                          <p className="text-lg font-semibold text-slate-900">{member.name}</p>
+                          <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">{member.name}</p>
                           <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-emerald-600">
                             {member.role}
                           </p>
                         </div>
                       </div>
                     )}
-                    <p className="flex-1 p-5 text-sm leading-relaxed text-slate-600">{member.blurb}</p>
+                    <p className="flex-1 p-5 text-sm leading-relaxed text-slate-600 dark:text-slate-400">{member.blurb}</p>
                   </div>
                 </div>
               </FadeInOnScroll>
@@ -1228,13 +1322,10 @@ export default function LandingPage() {
             >
               ✕
             </button>
-            <video
-              src="/Sensor%20housing%20Final.mp4"
+            {/* Opened deliberately by the user, and by now the file is cached. */}
+            <SensorHousingVideo
               className="w-full h-full object-contain bg-black"
-              autoPlay
-              loop
-              muted
-              playsInline
+              play="eager"
               controls
             />
           </div>
@@ -1242,18 +1333,22 @@ export default function LandingPage() {
       )}
 
       {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white py-12">
+      <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-12">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <FadeInOnScroll>
               <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 rounded-lg bg-white border border-slate-200 shadow-sm">
-                    <Activity className="h-5 w-5 text-slate-900" />
+                <Link
+                  href="/"
+                  aria-label="Addis Air Net — home"
+                  className="flex items-center gap-3 mb-4 w-fit rounded-lg transition-opacity hover:opacity-80"
+                >
+                  <div className="p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+                    <Activity className="h-5 w-5 text-slate-900 dark:text-slate-100" />
                   </div>
-                  <h3 className="text-xl font-bold text-slate-900">Air Quality Monitor</h3>
-                </div>
-                <p className="text-slate-600">
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100">Addis Air Net</h3>
+                </Link>
+                <p className="text-slate-600 dark:text-slate-400">
                   Real-time air quality monitoring for a cleaner and healthier Addis Ababa. Empowering
                   citizens, planners, and researchers with transparent data.
                 </p>
@@ -1261,12 +1356,12 @@ export default function LandingPage() {
             </FadeInOnScroll>
             <FadeInOnScroll delay={100}>
               <div>
-                <h4 className="font-semibold text-slate-900 mb-4">Quick Links</h4>
-                <ul className="space-y-2 text-slate-600">
+                <h4 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Quick Links</h4>
+                <ul className="space-y-2 text-slate-600 dark:text-slate-400">
                   <li>
                     <button
                       onClick={() => scrollToId("map")}
-                      className="hover:text-slate-900 transition-colors text-left"
+                      className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors text-left"
                     >
                       Map
                     </button>
@@ -1274,7 +1369,7 @@ export default function LandingPage() {
                   <li>
                     <button
                       onClick={() => scrollToId("sensors")}
-                      className="hover:text-slate-900 transition-colors text-left"
+                      className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors text-left"
                     >
                       Sensors
                     </button>
@@ -1282,13 +1377,18 @@ export default function LandingPage() {
                   <li>
                     <button
                       onClick={() => scrollToId("data")}
-                      className="hover:text-slate-900 transition-colors text-left"
+                      className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors text-left"
                     >
                       Data
                     </button>
                   </li>
                   <li>
-                    <Link href="/dashboard" className="hover:text-slate-900 transition-colors">
+                    <a href="/getting-started" className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors">
+                      Getting started
+                    </a>
+                  </li>
+                  <li>
+                    <a href="/dashboard" className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors">
                       Dashboard
                     </Link>
                   </li>
@@ -1297,8 +1397,8 @@ export default function LandingPage() {
             </FadeInOnScroll>
             <FadeInOnScroll delay={200}>
               <div>
-                <h4 className="font-semibold text-slate-900 mb-4">Partners</h4>
-                <p className="text-slate-600">
+                <h4 className="font-semibold text-slate-900 dark:text-slate-100 mb-4">Partners</h4>
+                <p className="text-slate-600 dark:text-slate-400">
                   Addis Ababa University
                   <br />
                   C40 Cities
@@ -1309,8 +1409,8 @@ export default function LandingPage() {
             </FadeInOnScroll>
           </div>
           <FadeInOnScroll delay={300}>
-            <div className="border-t border-slate-200 mt-8 pt-8 text-center text-slate-500 text-xs">
-              <p>&copy; 2024 Air Quality Monitor. Inspired by leading urban air-quality platforms.</p>
+            <div className="border-t border-slate-200 dark:border-slate-800 mt-8 pt-8 text-center text-slate-500 dark:text-slate-400 text-xs">
+              <p>&copy; 2026 Addis Air Net.</p>
             </div>
           </FadeInOnScroll>
         </div>
@@ -1379,62 +1479,8 @@ export default function LandingPage() {
         .delay-1000 {
           animation-delay: 1s;
         }
-        /* Animated hero background: modern net + slow glow */
-        .hero-net {
-          /* Primary orthogonal green grid */
-          background-image:
-            linear-gradient(
-              to right,
-              rgba(22, 163, 74, 0.22) 1px,
-              transparent 1px
-            ),
-            linear-gradient(
-              to bottom,
-              rgba(22, 163, 74, 0.22) 1px,
-              transparent 1px
-            ),
-            /* Subtle diagonal purple grid overlay for depth */
-            linear-gradient(
-              135deg,
-              rgba(147, 51, 234, 0.12) 1px,
-              transparent 1px
-            );
-          background-size: 40px 40px, 40px 40px, 80px 80px;
-          background-position: 0 0, 0 0, 0 0;
-          animation: net-drift 18s linear infinite;
-        }
-        .hero-glow {
-          background:
-            radial-gradient(circle at 10% 0%, rgba(22, 163, 74, 0.22), transparent 60%),
-            radial-gradient(circle at 90% 20%, rgba(147, 51, 234, 0.2), transparent 65%),
-            radial-gradient(circle at 40% 100%, rgba(124, 45, 18, 0.12), transparent 70%);
-          animation: glow-pulse 22s ease-in-out infinite alternate;
-        }
-        @keyframes net-drift {
-          0% {
-            background-position: 0px 0px, 0px 0px;
-          }
-          50% {
-            background-position: 20px 10px, 10px 20px;
-          }
-          100% {
-            background-position: 40px 0px, 0px 40px;
-          }
-        }
-        @keyframes glow-pulse {
-          0% {
-            transform: scale(1);
-            opacity: 0.8;
-          }
-          50% {
-            transform: scale(1.05);
-            opacity: 1;
-          }
-          100% {
-            transform: scale(1.08);
-            opacity: 0.9;
-          }
-        }
+        /* Atmospheric hero layers (clouds, wind streams, particles) live in
+           @/components/AtmosphereBackdrop — the old animated grid was replaced. */
       `}</style>
     </div>
   );

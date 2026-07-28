@@ -15,13 +15,16 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { ChartTimeRange, formatAxisTimeForRange } from "@/lib/utils/chart-time-range";
+import { ChartTimeRange, axisTickGap, formatAxisTimeForRange } from "@/lib/utils/chart-time-range";
 
 type ChartType = "line" | "area" | "bar";
 type ZoomDomain = [number, number] | null;
 
+/** `null` values are gaps in a series, not zeroes. */
+type ChartPoint = Record<string, number | string | null>;
+
 export interface ZoomableTimeSeriesChartProps {
-  data: Record<string, number | string>[];
+  data: ChartPoint[];
   yAxisLabel: string;
   chartType: ChartType;
   timeRange: ChartTimeRange;
@@ -29,13 +32,21 @@ export interface ZoomableTimeSeriesChartProps {
   height?: number;
   zoomDomain?: ZoomDomain;
   onZoomDomainChange?: (domain: ZoomDomain) => void;
-  tooltipContent?: React.ComponentType<{ data?: Record<string, number | string>[] }>;
+  tooltipContent?: React.ComponentType<{ data?: ChartPoint[] }>;
   stationCount?: number;
+  /**
+   * Full time span the chart and the timeline scrubber share. Without it each
+   * chart derives its own extent from its data, which drifts from the scrubber
+   * whenever bucket starts don't land on the requested window edges (daily
+   * buckets on 30D/1Y are floored to local midnight) — dragging the scrubber
+   * then clipped points off the chart.
+   */
+  fullExtent?: [number, number] | null;
 }
 
 const MIN_WINDOW_MS = 5 * 60 * 1000;
 
-function getDataExtent(data: Record<string, number | string>[]): [number, number] | null {
+function getDataExtent(data: ChartPoint[]): [number, number] | null {
   if (data.length === 0) return null;
   const timestamps = data.map((row) => Number(row.ts)).filter((ts) => Number.isFinite(ts));
   if (timestamps.length === 0) return null;
@@ -74,6 +85,7 @@ export function ZoomableTimeSeriesChart({
   onZoomDomainChange,
   tooltipContent: TooltipContent,
   stationCount = 1,
+  fullExtent = null,
 }: ZoomableTimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -82,7 +94,17 @@ export function ZoomableTimeSeriesChart({
   const zoomDomainRef = useRef<ZoomDomain>(zoomDomain ?? null);
   zoomDomainRef.current = zoomDomain ?? null;
 
-  const dataExtent = useMemo(() => getDataExtent(data), [data]);
+  // The zoom/pan coordinate system: the caller-supplied window when there is
+  // one (widened to cover any bucket that falls outside it), else the data.
+  const dataExtent = useMemo(() => {
+    const extent = getDataExtent(data);
+    if (!fullExtent) return extent;
+    if (!extent) return fullExtent;
+    return [Math.min(fullExtent[0], extent[0]), Math.max(fullExtent[1], extent[1])] as [
+      number,
+      number,
+    ];
+  }, [data, fullExtent]);
 
   const xDomain = useMemo((): [number | "dataMin", number | "dataMax"] => {
     if (zoomDomain) return zoomDomain;
@@ -172,7 +194,7 @@ export function ZoomableTimeSeriesChart({
             angle={stationCount > 2 ? -45 : 0}
             textAnchor={stationCount > 2 ? "end" : "middle"}
             height={stationCount > 2 ? 80 : 30}
-            minTickGap={timeRange === "1y" ? 48 : timeRange === "30d" ? 32 : 16}
+            minTickGap={axisTickGap(timeRange)}
           />
           <YAxis
             label={{ value: yAxisLabel, angle: -90, position: "insideLeft" }}

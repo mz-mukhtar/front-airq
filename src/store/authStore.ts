@@ -7,6 +7,7 @@ import {
   logout as apiLogout,
 } from '@/lib/api/auth';
 import { removeStoredUser } from '@/lib/api/config';
+import { clearAccountPreferences } from '@/lib/preferences';
 import { User } from '@/lib/api/types';
 
 interface AuthState {
@@ -14,9 +15,8 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<boolean>;
-  loginWithGoogle: () => Promise<boolean>;
   signup: (name: string, email: string, password: string, passwordConfirm: string) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   initialize: () => Promise<void>;
 }
@@ -96,12 +96,6 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      loginWithGoogle: async () => {
-        if (typeof window === 'undefined') return false;
-        window.location.href = '/api/auth/google/login';
-        return true;
-      },
-
       signup: async (name: string, email: string, password: string, passwordConfirm: string) => {
         try {
           await apiRegister({ name, email, password, password_confirm: passwordConfirm });
@@ -117,16 +111,37 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      logout: () => {
-        // Revoke the session server-side and clear the cookie via the proxy
-        apiLogout().catch(() => {
-          // Best-effort: cookie is cleared by the proxy even on upstream failure
-        });
+      logout: async () => {
+        // AWAIT the revocation before navigating.
+        //
+        // This used to fire apiLogout() without awaiting and immediately assign
+        // window.location.href. That assignment aborts in-flight fetches, so the
+        // two raced — and when the request lost, nothing on the server side
+        // happened at all: the backend never blacklisted the JWT, and the
+        // proxy's cookie-clearing Set-Cookie never reached the browser. The user
+        // landed on /login still holding a valid aq_session, so the very next
+        // /auth/me signed them straight back in. It looked like logout simply
+        // did not work, and the token stayed usable until it expired.
+        try {
+          await apiLogout();
+        } catch {
+          // Network failure or upstream error. The proxy clears the cookie on
+          // every logout response including its own 502, so a reachable
+          // frontend is enough to end the browser session; a token that was
+          // never blacklisted will expire on its own.
+        }
+
         // Clear the legacy "user_data" key for sessions created before it was removed
         removeStoredUser();
+        // Account-scoped preferences must not follow the next person who signs
+        // in on this browser — see clearAccountPreferences.
+        clearAccountPreferences();
         hasValidatedSession = false;
         set({ user: null, isAuthenticated: false });
+
         if (typeof window !== 'undefined') {
+          // Full reload rather than a client navigation: it guarantees every
+          // module-level cache and in-memory store is dropped with the session.
           window.location.href = '/login';
         }
       },
@@ -143,11 +158,22 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
-      partialize: (state) => ({ user: state.user }),
-      // Do NOT mutate isLoading / isAuthenticated here. Rehydration can run
-      // after initialize() has already settled them, and forcing isLoading=true
-      // would leave the app stuck on the loading screen on refresh. The persisted
-      // `user` is only a hint; initialize() (-> /auth/me) is the source of truth.
+      // Persist `user` and `isAuthenticated` together. Persisting only `user`
+      // split the two apart on rehydration: `isAuthenticated` came back false
+      // while `user` came back set, so anything deriving auth from `user` (the
+      // useAuth compat layer) disagreed with anything reading the flag directly
+      // (/stations, /dashboard) until initialize() resolved. Every mutation in
+      // this store already sets both fields, so keeping them together here is
+      // what makes them impossible to diverge.
+      partialize: (state) => ({
+        user: state.user,
+        isAuthenticated: state.isAuthenticated,
+      }),
+      // Do NOT mutate isLoading here. Rehydration can run after initialize()
+      // has already settled it, and forcing isLoading=true would leave the app
+      // stuck on the loading screen on refresh. The persisted pair is only an
+      // optimistic hint; initialize() (-> /auth/me) is the source of truth, so
+      // callers that act on it must gate on isLoading first.
     }
   )
 );

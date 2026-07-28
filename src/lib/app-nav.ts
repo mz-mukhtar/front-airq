@@ -1,4 +1,4 @@
-import { MapPin, Database, Settings, Shield, Activity, AlertTriangle, type LucideIcon } from "lucide-react";
+import { MapPin, Database, Settings, Shield, Activity, AlertTriangle, HelpCircle, type LucideIcon } from "lucide-react";
 
 export interface AppNavItem {
   icon: LucideIcon;
@@ -12,6 +12,10 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   { icon: Database, label: "Sensors", path: "/sensors", description: "Charts & export" },
   { icon: AlertTriangle, label: "Alerts", path: "/alerts", description: "Exceedances" },
   { icon: Settings, label: "Settings", path: "/settings", description: "Preferences" },
+  // Public, but it belongs in the app nav too: the guide explains the index
+  // scales and the export dialog, which is exactly when a signed-in user wants
+  // it. Previously it was reachable only from one strip on the landing page.
+  { icon: HelpCircle, label: "Guide", path: "/getting-started", description: "How to read the data" },
 ];
 
 export const ADMIN_NAV_ITEM: AppNavItem = {

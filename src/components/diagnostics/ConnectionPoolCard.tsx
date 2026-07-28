@@ -100,7 +100,14 @@ export function ConnectionPoolCard() {
           <div className="space-y-4">
             <div>
               <div className="mb-1 flex items-center justify-between text-xs">
-                <span className="font-medium text-muted-foreground">Pool Utilization</span>
+                <span className="font-medium text-muted-foreground">
+                  Pool Utilization
+                  {pool.capacity !== undefined && (
+                    <span className="ml-1 text-muted-foreground/70">
+                      ({pool.checked_out} of {pool.capacity} in use)
+                    </span>
+                  )}
+                </span>
                 <span className="font-semibold tabular-nums">{utilization.toFixed(1)}%</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -118,6 +125,11 @@ export function ConnectionPoolCard() {
                 </p>
                 <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">
                   {pool.pool_size}
+                  {pool.max_overflow ? (
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                      +{pool.max_overflow} overflow
+                    </span>
+                  ) : null}
                 </p>
               </div>
               <div>
@@ -154,9 +166,12 @@ export function ConnectionPoolCard() {
               </div>
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Invalid
+                  Invalidated
                 </p>
-                <p className={`mt-0.5 text-sm font-semibold tabular-nums ${pool.invalid > 0 ? "text-red-600" : "text-foreground"}`}>
+                <p
+                  className={`mt-0.5 text-sm font-semibold tabular-nums ${pool.invalid > 0 ? "text-red-600" : "text-foreground"}`}
+                  title="Connections dropped as dead since the API started — a rising count means an unstable link to the database."
+                >
                   {pool.invalid}
                 </p>
               </div>

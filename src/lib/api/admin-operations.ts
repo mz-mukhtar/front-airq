@@ -5,6 +5,7 @@ import {
   PerformanceStatsResponse,
   LogCleanupResponse,
   RequestLog,
+  RequestLogDetail,
   RequestLogsParams,
 } from './types';
 
@@ -58,6 +59,15 @@ export async function getRequestLogs(params: RequestLogsParams = {}): Promise<Re
   const endpoint = queryString ? `/request-logs?${queryString}` : '/request-logs';
 
   return apiRequest<RequestLog[]>(endpoint, {
+    requireAuth: true,
+  });
+}
+
+// One recorded request with its device, caller and neighbouring requests
+// resolved (Admin only). Fetched when a row is opened rather than carried in
+// the list, so the table stays light and the detail can be much richer.
+export async function getRequestLogDetail(logId: string): Promise<RequestLogDetail> {
+  return apiRequest<RequestLogDetail>(`/request-logs/${encodeURIComponent(logId)}`, {
     requireAuth: true,
   });
 }

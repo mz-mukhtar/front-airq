@@ -84,15 +84,6 @@ export async function completePasswordReset(
   });
 }
 
-// Exchange a one-time Google OAuth code for a session (cookie set by proxy).
-export async function exchangeGoogleCode(code: string): Promise<{ token_type?: string; expires_in?: number }> {
-  return apiRequest<{ token_type?: string; expires_in?: number }>('/auth/google/exchange', {
-    method: 'POST',
-    body: JSON.stringify({ code }),
-    requireAuth: false,
-  });
-}
-
 // Update password
 export async function updatePassword(
   currentPassword: string,

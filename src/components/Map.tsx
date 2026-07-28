@@ -7,19 +7,33 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Thermometer, Droplets, ArrowRight } from "lucide-react";
-import { getLatestKPIs } from "@/lib/api/sensor-readings";
-import { getLocations } from "@/lib/api/locations";
+import { getPublicMapKPIs } from "@/lib/api/sensor-readings";
+import { getSensorHealth } from "@/lib/api/sensor-health";
+import { SensorHealthStation } from "@/lib/api/types";
 import {
-  calculateAQI,
-  getAQIStatus,
-  getPM25Color,
-  getPM25Level,
-  joinKPIsWithLocations,
+  STATUS_STYLES,
+  StatusBadge,
+  formatAbsoluteTimestamp,
+  formatLastSeen,
+  freshnessStatus,
+  hoursSince,
+} from "@/components/diagnostics/health-status";
+import { useAuthStore } from "@/store/authStore";
+import {
+  averageDefined,
+  formatMetricValue,
+  embeddedKpisToJoined,
   buildMapStationsFromJoined,
-  getAirQualityLevelColor,
-  getAirQualityLevelTextColor,
   type MapStation,
 } from "@/lib/utils/readings";
+import {
+  AqiReading,
+  AqiStandard,
+  categoryRangeLabel,
+  evaluateAqi,
+} from "@/lib/utils/aqi-standards";
+import { useAqiStandard } from "@/lib/preferences";
+import { AqiStandardSelector } from "@/components/map/AqiStandardSelector";
 
 interface MapSettings {
   defaultZoom: number;
@@ -34,20 +48,43 @@ interface MapSettings {
 // marker per render.
 const circleIconCache = new globalThis.Map<string, L.DivIcon>();
 
-// Map dot color from backend air_quality_level, falling back to PM2.5
-const createCircleIcon = (aqi: number, pm2_5: number, airQualityLevel?: string | null) => {
-  const color = airQualityLevel
-    ? getAirQualityLevelColor(airQualityLevel)
-    : getPM25Color(pm2_5);
-  const cacheKey = `${color}|${aqi}`;
+// Map dot color and value both come from the reader's selected AQI standard,
+// so the bubble can never disagree with the popup or the legend.
+// statusHex adds a small freshness dot on the rim; faded dims the whole
+// bubble for stations whose data is outdated (offline / no data).
+const createCircleIcon = (
+  aqi: AqiReading,
+  textColor: string,
+  statusHex?: string,
+  faded = false
+) => {
+  const color = aqi.color;
+  // A station with no PM2.5 reading shows an em dash, not a fabricated 0.
+  const label = aqi.display;
+  const cacheKey = `${color}|${textColor}|${label}|${statusHex ?? ""}|${faded ? "f" : ""}`;
   const cached = circleIconCache.get(cacheKey);
   if (cached) return cached;
 
   const size = 50; // Circle diameter
-  const fontSize = aqi > 99 ? 14 : 16; // Smaller font for 3-digit numbers
-  
+  const fontSize = label.length > 3 ? 13 : label.length > 2 ? 14 : 16;
+
+  const statusDot = statusHex
+    ? `<span style="
+        position: absolute;
+        top: -1px;
+        right: -1px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background-color: ${statusHex};
+        border: 2px solid white;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+      "></span>`
+    : "";
+
   const html = `
     <div style="
+      position: relative;
       width: ${size}px;
       height: ${size}px;
       border-radius: 50%;
@@ -57,14 +94,15 @@ const createCircleIcon = (aqi: number, pm2_5: number, airQualityLevel?: string |
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
+      color: ${textColor};
       font-weight: bold;
       font-size: ${fontSize}px;
       cursor: pointer;
       pointer-events: auto;
       transition: transform 0.2s;
+      ${faded ? "opacity: 0.55; filter: saturate(0.6);" : ""}
     ">
-      ${aqi}
+      ${label}${statusDot}
     </div>
   `;
 
@@ -141,26 +179,20 @@ function getDisplayStations(items: MapStation[], zoom: number): DisplayStation[]
     const count = group.length;
     const avgLat = group.reduce((sum, s) => sum + s.position[0], 0) / count;
     const avgLng = group.reduce((sum, s) => sum + s.position[1], 0) / count;
-    const avgPm25 = group.reduce((sum, s) => sum + s.pm2_5, 0) / count;
-    const avgPm10 = group.reduce((sum, s) => sum + s.pm10_0, 0) / count;
-    const avgTemp = group.reduce((sum, s) => sum + s.temperature, 0) / count;
-    const avgHum = group.reduce((sum, s) => sum + s.humidity, 0) / count;
-    const avgAqi = calculateAQI(avgPm25, avgPm10);
-    const status = getAQIStatus(avgAqi);
-
+    // Cluster metrics average only the stations that actually reported. Counting
+    // a silent station as 0 dragged whole-cluster AQI down toward "Good".
     clusters.push({
       id: `cluster-${key}`,
       name: `${count} stations in this area`,
       position: [avgLat, avgLng],
-      aqi: avgAqi,
-      status,
-      airQualityLevel: status,
-      pm2_5: avgPm25,
-      pm10_0: avgPm10,
-      humidity: avgHum,
-      temperature: avgTemp,
+      pm1_0: averageDefined(group.map((s) => s.pm1_0)),
+      pm2_5: averageDefined(group.map((s) => s.pm2_5)),
+      pm10_0: averageDefined(group.map((s) => s.pm10_0)),
+      humidity: averageDefined(group.map((s) => s.humidity)),
+      temperature: averageDefined(group.map((s) => s.temperature)),
       locationId: "",
       deviceId: "",
+      lastSeenAt: null,
       clusterSize: count,
       stationNames: group.map((s) => s.name),
     });
@@ -176,36 +208,46 @@ function centerFromStations(stations: MapStation[]): [number, number] | null {
   return [avgLat, avgLng];
 }
 
-function formatMetric(value: number, digits = 1): string {
-  return Number.isFinite(value) ? value.toFixed(digits) : "—";
-}
-
-// PM2.5 labels/colors match reference: Good 0–15, Moderate 15–35, Unhealthy (Sensitive) 35–55, Unhealthy 55+
-function getParameterQuality(param: string, value: number) {
-  if (param === "pm2_5") {
-    const level = getPM25Level(value);
-    if (level === "Good") return { label: "Good", color: "text-green-600" };
-    if (level === "Moderate") return { label: "Moderate", color: "text-yellow-600" };
-    if (level === "Unhealthy (Sensitive)") return { label: "Unhealthy (Sensitive)", color: "text-orange-600" };
-    return { label: "Unhealthy", color: "text-red-600" };
-  }
-  if (param === "pm10_0") {
-    if (value <= 20) return { label: "Good", color: "text-green-600" };
-    if (value <= 50) return { label: "Moderate", color: "text-yellow-600" };
-    if (value <= 100) return { label: "Unhealthy", color: "text-orange-600" };
-    return { label: "Hazardous", color: "text-red-600" };
-  }
-  return { label: "Normal", color: "text-gray-600" };
+/**
+ * PM1.0 has no published index of its own, so it is shown as a plain number.
+ * Only PM2.5 is colored, and its color comes from the selected standard so the
+ * popup value and the map dot always tell the same story.
+ */
+function pm25TextStyle(aqi: AqiReading): React.CSSProperties | undefined {
+  return aqi.category ? { color: aqi.color } : undefined;
 }
 
 // Memoized marker: popup open/close and map zoom state changes in the parent
 // no longer recreate every marker on the map.
-const StationMarker = memo(function StationMarker({ station }: { station: DisplayStation }) {
+const StationMarker = memo(function StationMarker({
+  station,
+  standard,
+  health,
+}: {
+  station: DisplayStation;
+  /** The reader's selected index — drives the dot, the value and the category. */
+  standard: AqiStandard;
+  /** Admin-only sensor-health overlay for this device (undefined otherwise). */
+  health?: SensorHealthStation;
+}) {
   const router = useRouter();
-  const pm2_5Quality = getParameterQuality("pm2_5", station.pm2_5);
-  const pm10_0Quality = getParameterQuality("pm10_0", station.pm10_0);
-  const customIcon = createCircleIcon(station.aqi, station.pm2_5, station.airQualityLevel);
+  // Subscribed here rather than passed down so the memo boundary still holds:
+  // markers only re-render when auth actually flips.
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const aqi = evaluateAqi(standard, station.pm2_5);
   const isCluster = !!station.clusterSize && station.clusterSize > 1;
+  // Freshness for the corner dot: admin health data when present, otherwise
+  // derived from the station's latest reading timestamp (works for everyone).
+  const freshness = isCluster
+    ? null
+    : health?.status ?? freshnessStatus(station.lastSeenAt);
+  const statusHex = freshness
+    ? (STATUS_STYLES[freshness] ?? STATUS_STYLES.no_data).hex
+    : undefined;
+  // Outdated stations (offline / never reported) render faded so the map
+  // doesn't present stale values as live.
+  const faded = freshness === "offline" || freshness === "no_data";
+  const customIcon = createCircleIcon(aqi, aqi.textColor, statusHex, faded);
 
   return (
     <Marker position={station.position} icon={customIcon}>
@@ -214,13 +256,11 @@ const StationMarker = memo(function StationMarker({ station }: { station: Displa
           <div className="station-popup-hero">
             <div
               className="station-popup-aqi"
-              style={{
-                backgroundColor: getAirQualityLevelColor(station.airQualityLevel),
-                color: getAirQualityLevelTextColor(station.airQualityLevel),
-              }}
+              style={{ backgroundColor: aqi.color, color: aqi.textColor }}
+              title={`${standard.name} — ${aqi.label}. ${standard.attribution} ${standard.methodology}`}
             >
-              <span className="station-popup-aqi-value">{station.aqi}</span>
-              <span className="station-popup-aqi-label">AQI</span>
+              <span className="station-popup-aqi-value">{aqi.display}</span>
+              <span className="station-popup-aqi-label">{standard.valueLabel}</span>
             </div>
 
             <div className="station-popup-info">
@@ -233,7 +273,7 @@ const StationMarker = memo(function StationMarker({ station }: { station: Displa
                   </span>
                 )}
               </h3>
-              <p className="station-popup-status">{station.status}</p>
+              <p className="station-popup-status">{aqi.label}</p>
               {isCluster && station.stationNames && (
                 <p className="station-popup-cluster-names">
                   {station.stationNames.slice(0, 3).join(", ")}
@@ -246,7 +286,16 @@ const StationMarker = memo(function StationMarker({ station }: { station: Displa
               <button
                 type="button"
                 onClick={() => {
-                  router.push(`/stations?device=${station.deviceId}`);
+                  // /stations is behind auth, and this map also renders on the
+                  // public landing page — so an anonymous visitor is sent to
+                  // sign in carrying the station they clicked, rather than
+                  // being bounced to a bare login page and losing it.
+                  const target = `/stations?device=${station.deviceId}`;
+                  router.push(
+                    isAuthenticated
+                      ? target
+                      : `/login?next=${encodeURIComponent(target)}`
+                  );
                 }}
                 className="station-popup-link"
               >
@@ -256,31 +305,47 @@ const StationMarker = memo(function StationMarker({ station }: { station: Displa
             )}
           </div>
 
+          {freshness && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
+              <StatusBadge status={freshness} />
+              <span title="Timestamp of the most recent reading">
+                Last updated:{" "}
+                {formatAbsoluteTimestamp(health?.last_reading ?? station.lastSeenAt)}
+                {" ("}
+                {formatLastSeen(
+                  health?.hours_since_last ?? hoursSince(station.lastSeenAt),
+                  health?.last_reading ?? station.lastSeenAt
+                )}
+                {")"}
+              </span>
+            </div>
+          )}
+
           <div className="station-popup-metrics">
             <div className="station-popup-metric">
-              <span className="station-popup-metric-label">PM2.5</span>
-              <span className={`station-popup-metric-value ${pm2_5Quality.color}`}>
-                {formatMetric(station.pm2_5)}
+              <span className="station-popup-metric-label">PM1.0</span>
+              <span className="station-popup-metric-value text-foreground">
+                {formatMetricValue(station.pm1_0)}
                 <span className="station-popup-metric-unit">µg/m³</span>
               </span>
             </div>
             <div className="station-popup-metric">
-              <span className="station-popup-metric-label">PM10</span>
-              <span className={`station-popup-metric-value ${pm10_0Quality.color}`}>
-                {formatMetric(station.pm10_0)}
+              <span className="station-popup-metric-label">PM2.5</span>
+              <span className="station-popup-metric-value" style={pm25TextStyle(aqi)}>
+                {formatMetricValue(station.pm2_5)}
                 <span className="station-popup-metric-unit">µg/m³</span>
               </span>
             </div>
             <div className="station-popup-metric station-popup-metric--weather">
               <Thermometer className="h-3.5 w-3.5 text-amber-500" aria-hidden />
               <span className="station-popup-metric-value text-foreground">
-                {formatMetric(station.temperature)}°C
+                {station.temperature === null ? "—" : `${formatMetricValue(station.temperature)}°C`}
               </span>
             </div>
             <div className="station-popup-metric station-popup-metric--weather">
               <Droplets className="h-3.5 w-3.5 text-blue-500" aria-hidden />
               <span className="station-popup-metric-value text-foreground">
-                {formatMetric(station.humidity)}%
+                {station.humidity === null ? "—" : `${formatMetricValue(station.humidity)}%`}
               </span>
             </div>
           </div>
@@ -299,6 +364,11 @@ export function MapComponent({ fullscreen = false, stations: externalStations, l
   const [internalLoading, setInternalLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isClient, setIsClient] = useState(false);
+  // The index every dot, popup and legend entry on this map reports against.
+  const standard = useAqiStandard();
+  // Admin-only diagnostics overlay: sensor health keyed by device_id
+  const isAdmin = useAuthStore((state) => state.user?.role === "admin");
+  const [healthByDevice, setHealthByDevice] = useState<Record<string, SensorHealthStation>>({});
 
   const stations = isControlled ? externalStations : internalStations;
   const isLoading = isControlled ? (externalLoading ?? false) : internalLoading;
@@ -327,7 +397,42 @@ export function MapComponent({ fullscreen = false, stations: externalStations, l
   useEffect(() => {
     setIsClient(true);
     loadMapSettings();
+
+    // React to settings changes in all modes (controlled maps included) —
+    // the labels toggle and zoom/center must apply without a reload.
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "mapSettings") loadMapSettings();
+    };
+    const handleCustomStorageChange = () => loadMapSettings();
+    window.addEventListener("storage", handleStorageChange);
+    window.addEventListener("mapSettingsChanged", handleCustomStorageChange);
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("mapSettingsChanged", handleCustomStorageChange);
+    };
   }, []);
+
+  // Best-effort health overlay for admins (status dot + popup diagnostics row).
+  useEffect(() => {
+    if (!isAdmin) {
+      setHealthByDevice({});
+      return;
+    }
+    let cancelled = false;
+    getSensorHealth()
+      .then((res) => {
+        if (cancelled) return;
+        const byDevice: Record<string, SensorHealthStation> = {};
+        for (const s of res.stations) byDevice[s.device_id] = s;
+        setHealthByDevice(byDevice);
+      })
+      .catch(() => {
+        // Overlay only — the map works fine without it.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
 
   useEffect(() => {
     if (!isControlled || externalStations.length === 0) return;
@@ -346,11 +451,8 @@ export function MapComponent({ fullscreen = false, stations: externalStations, l
       setError(null);
 
       try {
-        const [locations, kpiData] = await Promise.all([
-          getLocations(),
-          getLatestKPIs(),
-        ]);
-        const joined = joinKPIsWithLocations(kpiData, locations);
+        const kpiData = await getPublicMapKPIs();
+        const joined = embeddedKpisToJoined(kpiData);
         const stationsData = buildMapStationsFromJoined(joined);
 
         if (stationsData.length === 0) {
@@ -361,17 +463,18 @@ export function MapComponent({ fullscreen = false, stations: externalStations, l
         const center = centerFromStations(stationsData);
         if (center) setMapCenter(center);
         setInternalStations(stationsData);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Error fetching map data:", err);
+        const errObj = (err ?? {}) as { detail?: string; message?: string; status?: number };
         let errorMessage = "Failed to load map data";
-        if (err?.detail) {
-          errorMessage = err.detail;
-        } else if (err?.message) {
-          errorMessage = err.message;
+        if (typeof errObj.detail === "string" && errObj.detail) {
+          errorMessage = errObj.detail;
+        } else if (typeof errObj.message === "string" && errObj.message) {
+          errorMessage = errObj.message;
         } else if (typeof err === "string") {
           errorMessage = err;
         }
-        if (errorMessage.includes("Not Found") || err?.status === 404) {
+        if (errorMessage.includes("Not Found") || errObj.status === 404) {
           errorMessage =
             "API endpoint not found. Please check if the backend is running and the endpoint exists.";
         }
@@ -473,39 +576,63 @@ export function MapComponent({ fullscreen = false, stations: externalStations, l
         />
         <ZoomSync onZoomChange={setMapZoom} />
         {displayStations.map((station) => (
-          <StationMarker key={station.id} station={station} />
+          <StationMarker
+            key={station.id}
+            station={station}
+            standard={standard}
+            health={healthByDevice[station.deviceId]}
+          />
         ))}
       </MapContainer>
 
-      {/* PM2.5 color legend */}
+      {/*
+        AQI standard picker, top-left, outside <MapContainer> so Leaflet never
+        receives the clicks. Offset past Leaflet's own top-left zoom control.
+        The fullscreen map page renders its own copy inside MapPageChrome's
+        top-left stack instead, so it can sit under the branding card without
+        either one guessing the other's height.
+      */}
+      {!fullscreen && (
+        <div className="absolute left-14 top-3 z-[1000]">
+          <AqiStandardSelector standard={standard} />
+        </div>
+      )}
+
+      {/* Dot-color legend for the selected standard (PM2.5 µg/m³ bands) */}
       <div
         className={
           fullscreen
-            ? "pointer-events-none absolute bottom-4 right-4 mb-14 bg-card/95 backdrop-blur rounded-lg border border-border shadow-md px-3 py-2 text-[11px] text-foreground/80 space-y-1"
-            : "pointer-events-none absolute bottom-4 right-4 bg-card/95 backdrop-blur rounded-lg border border-border shadow-md px-3 py-2 text-[11px] text-foreground/80 space-y-1"
+            ? "pointer-events-none absolute bottom-4 right-4 mb-14 max-w-[15rem] bg-card/95 backdrop-blur rounded-lg border border-border shadow-md px-3 py-2 text-[11px] text-foreground/80 space-y-1"
+            : "pointer-events-none absolute bottom-4 right-4 max-w-[15rem] bg-card/95 backdrop-blur rounded-lg border border-border shadow-md px-3 py-2 text-[11px] text-foreground/80 space-y-1"
         }
       >
-        <p className="font-semibold text-[11px] text-foreground">PM2.5 dot colors (µg/m³)</p>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#22c55e]" />
-            <span>0–15 Good</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#eab308]" />
-            <span>15–35 Moderate</span>
-          </div>
+        <p className="font-semibold text-[11px] text-foreground">
+          {standard.shortName} · PM2.5 (µg/m³)
+        </p>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          {standard.categories.map((category, index) => (
+            <div key={category.label} className="flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: category.color }}
+              />
+              <span className="truncate" title={`${categoryRangeLabel(standard, index)} ${category.label}`}>
+                {categoryRangeLabel(standard, index)} {category.shortLabel}
+              </span>
+            </div>
+          ))}
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#f97316]" />
-            <span>35–55 Unhealthy (SG)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#dc2626]" />
-            <span>55+ Unhealthy</span>
-          </div>
-        </div>
+        {/*
+          These category names are the standards body's wording, so the body is
+          credited here rather than only inside the picker — and the methodology
+          note says where our live figure departs from the published method.
+        */}
+        <p
+          className="border-t border-border/60 pt-1.5 text-[10px] leading-snug text-muted-foreground"
+          title={`${standard.attribution} ${standard.methodology}`}
+        >
+          Scale: {standard.source}. Live PM2.5, not a 24-hour average.
+        </p>
       </div>
     </div>
   );

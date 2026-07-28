@@ -8,7 +8,9 @@ import {
   LocationDeleteSuccessResponse,
 } from './types';
 
-// Get all locations (public endpoint - no auth required)
+// Get all locations (authenticated; the public map gets coords from
+// GET /sensor-readings/kpi-map instead). requireAuth:false only suppresses the
+// login redirect — the backend enforces auth.
 export async function getLocations(): Promise<Location[]> {
   return dedupeAsync('locations', () =>
     apiRequest<Location[]>('/locations/', {
@@ -17,7 +19,7 @@ export async function getLocations(): Promise<Location[]> {
   );
 }
 
-// Get location by ID (public endpoint - no auth required)
+// Get location by ID (authenticated).
 export async function getLocationById(locationId: string): Promise<Location> {
   return apiRequest<Location>(`/locations/${locationId}`, {
     requireAuth: false,

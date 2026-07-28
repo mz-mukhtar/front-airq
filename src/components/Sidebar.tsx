@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -18,6 +19,7 @@ import {
   Activity,
 } from "lucide-react";
 import { useStationNavItems, type StationNavItem } from "@/hooks/useStationNavItems";
+import { useWaitlistNotifications } from "@/hooks/useWaitlistNotifications";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   APP_NAV_ITEMS,
@@ -39,19 +41,27 @@ function NavButton({
   expanded,
   onNavigate,
   nested,
+  badge,
+  badgeLabel,
 }: {
   item: AppNavItem;
   active: boolean;
   expanded: boolean;
   onNavigate: (path: string) => void;
   nested?: boolean;
+  /** Unread-style count. Rendered only when > 0. */
+  badge?: number;
+  /** Accessible description of what the count means. */
+  badgeLabel?: string;
 }) {
   const Icon = item.icon;
+  const showBadge = typeof badge === "number" && badge > 0;
+  const badgeText = showBadge ? (badge > 99 ? "99+" : String(badge)) : "";
   return (
     <button
       type="button"
       onClick={() => onNavigate(item.path)}
-      title={!expanded ? item.label : undefined}
+      title={!expanded ? (showBadge ? `${item.label} — ${badgeLabel}` : item.label) : undefined}
       className={cn(
         "group relative flex w-full items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200",
         nested ? "px-3 py-2" : "px-3 py-2.5",
@@ -64,7 +74,18 @@ function NavButton({
       {active && !nested && (
         <span className="absolute -left-1 top-1/2 h-6 w-1 -translate-y-1/2 rounded-full bg-ring" />
       )}
-      <Icon className={cn("h-[1.125rem] w-[1.125rem] shrink-0", active && "text-primary-foreground")} />
+      <span className="relative shrink-0">
+        <Icon className={cn("h-[1.125rem] w-[1.125rem]", active && "text-primary-foreground")} />
+        {/*
+          Collapsed rail has no room for a number beside the label, so the count
+          rides the icon itself — the only place it stays visible in both states.
+        */}
+        {showBadge && !expanded && (
+          <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-background">
+            {badgeText}
+          </span>
+        )}
+      </span>
       {expanded && (
         <span className="flex min-w-0 flex-1 flex-col items-start text-left leading-tight">
           <span>{item.label}</span>
@@ -80,8 +101,66 @@ function NavButton({
           )}
         </span>
       )}
+      {showBadge && expanded && (
+        <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-600 px-1.5 text-[11px] font-bold leading-none text-white">
+          {badgeText}
+        </span>
+      )}
+      {showBadge && (
+        <span className="sr-only">{badgeLabel}</span>
+      )}
     </button>
   );
+}
+
+interface StationNavListProps {
+  stations: StationNavItem[];
+  onNavigate: (path: string) => void;
+  /** device_id of the station currently open on /sensors, if any. */
+  activeDeviceId?: string | null;
+}
+
+/**
+ * The per-station links. Presentational so it can render both inside and
+ * outside the Suspense boundary below — the fallback is the same list without
+ * the active highlight, so nothing shifts when the query string resolves.
+ */
+function StationNavList({ stations, onNavigate, activeDeviceId }: StationNavListProps) {
+  return (
+    <>
+      {stations.map((station) => {
+        const active = !!activeDeviceId && station.deviceId === activeDeviceId;
+        return (
+          <button
+            key={station.id}
+            type="button"
+            aria-current={active ? "page" : undefined}
+            onClick={() => onNavigate(`/sensors?device=${station.deviceId}`)}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition-colors",
+              active
+                ? "bg-primary/10 font-semibold text-primary"
+                : "text-muted-foreground hover:bg-card hover:text-foreground"
+            )}
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full",
+                active ? "bg-primary" : "bg-primary/60"
+              )}
+            />
+            <span className="truncate">{station.name}</span>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/** Same list, reading ?device= so the open station is marked. */
+function ActiveStationNavList(props: Omit<StationNavListProps, "activeDeviceId">) {
+  const searchParams = useSearchParams();
+  return <StationNavList {...props} activeDeviceId={searchParams.get("device")} />;
 }
 
 function SidebarNav({
@@ -91,6 +170,7 @@ function SidebarNav({
   stationsLoading,
   menuItems,
   pathname,
+  adminBadge = 0,
 }: {
   expanded: boolean;
   onNavigate: (path: string) => void;
@@ -98,6 +178,8 @@ function SidebarNav({
   stationsLoading: boolean;
   menuItems: AppNavItem[];
   pathname: string;
+  /** Access requests awaiting review, shown on the Admin item. */
+  adminBadge?: number;
 }) {
   const sensorsActive =
     pathname === "/sensors" ||
@@ -128,6 +210,12 @@ function SidebarNav({
           active={isActiveNavPath(pathname, item.path)}
           expanded={expanded}
           onNavigate={onNavigate}
+          badge={item.path === ADMIN_NAV_ITEM.path ? adminBadge : undefined}
+          badgeLabel={
+            adminBadge === 1
+              ? "1 access request awaiting review"
+              : `${adminBadge} access requests awaiting review`
+          }
         />
       ))}
 
@@ -178,17 +266,15 @@ function SidebarNav({
                   ) : stations.length === 0 ? (
                     <p className="px-3 py-2 text-xs text-muted-foreground">No stations</p>
                   ) : (
-                    stations.map((station) => (
-                      <button
-                        key={station.id}
-                        type="button"
-                        onClick={() => onNavigate(`/sensors?device=${station.deviceId}`)}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
-                      >
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary/60" />
-                        <span className="truncate">{station.name}</span>
-                      </button>
-                    ))
+                    // Local Suspense boundary: the list reads ?device= to mark
+                    // the open station, and useSearchParams needs a boundary
+                    // above it. Keeping it here means the pages that render the
+                    // sidebar don't each need one.
+                    <Suspense
+                      fallback={<StationNavList stations={stations} onNavigate={onNavigate} />}
+                    >
+                      <ActiveStationNavList stations={stations} onNavigate={onNavigate} />
+                    </Suspense>
                   )}
                 </div>
               )}
@@ -212,6 +298,7 @@ export function Sidebar({ isOpen, onToggle }: SidebarProps) {
   const pathname = usePathname();
   const { user } = useAuth();
   const { stations, stationsLoading } = useStationNavItems();
+  const { pending: pendingRequests } = useWaitlistNotifications();
 
   const menuItems = [...APP_NAV_ITEMS];
   if (user?.role === "admin") {
@@ -229,22 +316,32 @@ export function Sidebar({ isOpen, onToggle }: SidebarProps) {
           isOpen ? "justify-between gap-2" : "justify-center"
         )}
       >
+        {/* Brand mark links home, collapsed or expanded. */}
         {isOpen ? (
-          <div className="flex min-w-0 items-center gap-3">
+          <Link
+            href="/"
+            aria-label="Addis Air Net — home"
+            className="flex min-w-0 items-center gap-3 rounded-xl transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
               <Activity className="h-5 w-5" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-foreground">Air Quality</p>
+              <p className="truncate text-sm font-semibold text-foreground">Addis Air Net</p>
               <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                Monitor
+                Air quality
               </p>
             </div>
-          </div>
+          </Link>
         ) : (
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+          <Link
+            href="/"
+            aria-label="Addis Air Net — home"
+            title="Addis Air Net — home"
+            className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <Activity className="h-5 w-5" />
-          </div>
+          </Link>
         )}
         {isOpen && (
           <Button
@@ -266,6 +363,7 @@ export function Sidebar({ isOpen, onToggle }: SidebarProps) {
         stationsLoading={stationsLoading}
         menuItems={menuItems}
         pathname={pathname}
+        adminBadge={pendingRequests}
       />
 
       <div className="mt-auto border-t border-border/50 p-3">

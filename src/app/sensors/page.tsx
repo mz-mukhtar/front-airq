@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo, Suspense, useRef, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useAuthStore } from "@/store/authStore";
+import { useSearchParams } from "next/navigation";
+import { RequireAuth } from "@/components/RequireAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Database, AlertCircle, Thermometer, Droplets, Download, LineChart as LineChartIcon, AreaChart as AreaChartIcon, BarChart as BarChartIcon, Table as TableIcon, X, Merge, FileSpreadsheet } from "lucide-react";
@@ -11,7 +11,7 @@ import { LoadingState } from "@/components/ui/loading-state";
 import { getLocations } from "@/lib/api/locations";
 import { getSensorDevices } from "@/lib/api/sensor-devices";
 import { Location, SensorDevice, SensorReading } from "@/lib/api/types";
-import { extractReadingValue, extractReadingValueOrNull, extractTimestamp, calculateAQI, getAQIStatus, getAirQualityLevelBadgeClass } from "@/lib/utils/readings";
+import { extractReadingValueOrNull, extractTimestamp, calculateAQI, getAQIStatus, getAirQualityLevelBadgeClass, formatMetricValue } from "@/lib/utils/readings";
 import {
   fetchChartSeries,
   filtersToRawParams,
@@ -29,8 +29,13 @@ import {
 import {
   ChartTimeRange,
   chartWindowTitle,
+  chartWindowCaption,
+  chartRangeKey,
   seriesFiltersForRange,
   chartRangeToSeriesParams,
+  isCompleteRange,
+  customRangeBounds,
+  DEFAULT_CHART_TIME_RANGE,
 } from "@/lib/utils/chart-time-range";
 import {
   getAnalyticsSummary,
@@ -72,12 +77,13 @@ import {
 interface StationData {
   id: string;
   name: string;
-  pm2_5: number;
-  pm10_0: number;
-  humidity: number;
-  temperature: number;
-  voc: number;
-  nox: number;
+  // Nullable throughout: a metric the sensor did not report renders as "—".
+  pm2_5: number | null;
+  pm10_0: number | null;
+  humidity: number | null;
+  temperature: number | null;
+  voc: number | null;
+  nox: number | null;
   aqi: number | string | null;
   status: string;
   deviceId: string;
@@ -107,6 +113,13 @@ function formatLastSeen(iso: string | null): string {
 
 type ChartType = "line" | "area" | "bar";
 type ViewMode = "graph" | "table";
+
+/**
+ * One chart data point. A `null` metric means "the sensor did not report here";
+ * Recharts renders that as a break in the series (with connectNulls off) rather
+ * than a plunge to zero. Never substitute 0 for a missing reading.
+ */
+type ChartPoint = Record<string, number | string | null>;
 
 // Above this many data points, per-point dots on line charts are pure SVG
 // bloat — hide them and keep just the stroke.
@@ -152,8 +165,6 @@ function formatTooltipTime(ts: unknown) {
 }
 
 function SensorsContent() {
-  const { isAuthenticated, isLoading: authLoading } = useAuthStore();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const deviceId = searchParams.get("device");
   const [stations, setStations] = useState<StationData[]>([]);
@@ -200,7 +211,7 @@ function SensorsContent() {
     device: SensorDevice;
     location: Location;
   }>>([]);
-  const [chartTimeRange, setChartTimeRange] = useState<ChartTimeRange>("24h");
+  const [chartTimeRange, setChartTimeRange] = useState<ChartTimeRange>(DEFAULT_CHART_TIME_RANGE);
   const [seriesRefreshing, setSeriesRefreshing] = useState(false);
   const [summaryData, setSummaryData] = useState<AnalyticsSummaryResponse | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -282,7 +293,10 @@ function SensorsContent() {
         const deviceRow = deviceAqiMap?.get(deviceIdToFetch);
 
         if (sortedReadings.length > 0 || latest.recorded_at) {
-          const status = deviceRow?.aqi_category ?? getAQIStatus(calculateAQI(latest.pm2_5, latest.pm10));
+          const latestAqi = calculateAQI(latest.pm2_5, latest.pm10);
+          const status =
+            deviceRow?.aqi_category ??
+            (latestAqi !== null ? getAQIStatus(latestAqi) : "No Data");
           stationsData.push({
             id: deviceIdToFetch,
             name: deviceInfo.location.name,
@@ -292,7 +306,7 @@ function SensorsContent() {
             temperature: latest.temperature,
             voc: latest.voc,
             nox: latest.nox,
-            aqi: deviceRow ? null : calculateAQI(latest.pm2_5, latest.pm10),
+            aqi: deviceRow ? null : latestAqi,
             status,
             deviceId: deviceIdToFetch,
             locationId: deviceInfo.location.id,
@@ -304,13 +318,13 @@ function SensorsContent() {
           stationsData.push({
             id: deviceIdToFetch,
             name: deviceInfo.location.name,
-            pm2_5: 0,
-            pm10_0: 0,
-            humidity: 0,
-            temperature: 0,
-            voc: 0,
-            nox: 0,
-            aqi: 0,
+            pm2_5: null,
+            pm10_0: null,
+            humidity: null,
+            temperature: null,
+            voc: null,
+            nox: null,
+            aqi: null,
             status: "No Data",
             deviceId: deviceIdToFetch,
             locationId: deviceInfo.location.id,
@@ -344,7 +358,7 @@ function SensorsContent() {
       // Race guard: capture a monotonically increasing id; if a newer request
       // starts while this one is in flight, the stale response is discarded.
       const requestId = ++seriesRequestIdRef.current;
-      const queryKey = `${[...devicesToFetch].sort().join(",")}|${range}`;
+      const queryKey = `${[...devicesToFetch].sort().join(",")}|${chartRangeKey(range)}`;
 
       if (blocking) {
         setIsLoading(true);
@@ -358,14 +372,19 @@ function SensorsContent() {
         const rangeParams = chartRangeToSeriesParams(range);
         const days = rangeParams.days ?? (rangeParams.hours ? (rangeParams.hours <= 24 ? 1 : Math.ceil(rangeParams.hours / 24)) : 30);
         const filterDeviceIds = devicesToFetch.length < availableDevices.length ? devicesToFetch : undefined;
+        // A typed range is a fixed span, not a rolling one, so the analytics
+        // cards get explicit bounds — `days` counts back from now and could not
+        // describe a window that ended in the past.
+        const analyticsWindow =
+          range.preset === "custom" ? customRangeBounds(range) : { days };
 
         const [seriesResponse, aqiResponse, summaryRes] = await Promise.all([
           fetchChartSeries(seriesFiltersForRange(range), devicesToFetch),
-          getAnalyticsAqi({ days, group_by: "device", device_ids: filterDeviceIds }).catch((e) => {
+          getAnalyticsAqi({ ...analyticsWindow, group_by: "device", device_ids: filterDeviceIds }).catch((e) => {
             console.error("Error fetching grouped AQI:", e);
             return null;
           }),
-          getAnalyticsSummary({ days, device_ids: filterDeviceIds }).catch((e) => {
+          getAnalyticsSummary({ ...analyticsWindow, device_ids: filterDeviceIds }).catch((e) => {
             console.error("Error fetching analytics summary:", e);
             return null;
           }),
@@ -401,12 +420,13 @@ function SensorsContent() {
 
   // Initial / station selection fetch (full-page loader only when no data yet)
   useEffect(() => {
-    if (!isAuthenticated || availableDevices.length === 0 || activeDeviceIds.length === 0) {
+    if (availableDevices.length === 0 || activeDeviceIds.length === 0) {
       return;
     }
+    if (!isCompleteRange(chartTimeRangeRef.current)) return;
     const blocking = !stationsLoadedRef.current;
     loadSeries(activeDeviceIds, chartTimeRangeRef.current, blocking);
-  }, [isAuthenticated, activeDeviceIds, availableDevices.length, loadSeries]);
+  }, [activeDeviceIds, availableDevices.length, loadSeries]);
 
   // Time range change — background refresh, no full-page reload
   useEffect(() => {
@@ -414,33 +434,33 @@ function SensorsContent() {
       skipRangeFetchRef.current = false;
       return;
     }
-    if (!isAuthenticated || activeDeviceIds.length === 0 || !stationsLoadedRef.current) {
+    if (activeDeviceIds.length === 0 || !stationsLoadedRef.current) {
       return;
     }
+    // A half-filled custom range would query an unbounded window.
+    if (!isCompleteRange(chartTimeRange)) return;
     loadSeries(activeDeviceIds, chartTimeRange, false);
-  }, [chartTimeRange, isAuthenticated, activeDeviceIds, loadSeries]);
+  }, [chartTimeRange, activeDeviceIds, loadSeries]);
 
-  // Fetch device and location metadata only (no readings)
+  // Fetch device and location metadata only (no readings).
+  // No auth check: RequireAuth doesn't mount this component until the session
+  // is confirmed, so this fetch fires once with a valid session instead of
+  // running, bailing, and re-running when auth resolves.
   useEffect(() => {
     const fetchMetadata = async () => {
-      if (!isAuthenticated) {
-        router.push("/login");
-        return;
-      }
-
       try {
         const [locations, allDevices] = await Promise.all([
           getLocations(),
           getSensorDevices(),
         ]);
         const activeDevices = allDevices.filter(d => d.status === 'active');
-        
+
         // Build available devices list
         const devicesList = activeDevices.map(device => {
           const location = locations.find(l => l.id === device.location_id);
           return { device, location: location! };
         }).filter(item => item.location);
-        
+
         setAvailableDevices(devicesList);
 
         if (deviceId) {
@@ -458,18 +478,21 @@ function SensorsContent() {
     };
 
     fetchMetadata();
-  }, [isAuthenticated, router, deviceId]);
+  }, [deviceId]);
 
   // Fetch ONE page of raw readings for table view (cursor pagination).
   // Switching to table view no longer exhaustively pages the whole dataset.
   // Pagination reset is folded in here: when devices/range change, this run
   // resets the cursors itself instead of pairing new filters with a stale cursor.
   useEffect(() => {
-    if (!isAuthenticated || viewMode !== "table" || activeDeviceIds.length === 0) {
+    if (viewMode !== "table" || activeDeviceIds.length === 0) {
+      return;
+    }
+    if (!isCompleteRange(chartTimeRange)) {
       return;
     }
 
-    const queryKey = `${activeDeviceIds.join(",")}|${chartTimeRange}`;
+    const queryKey = `${activeDeviceIds.join(",")}|${chartRangeKey(chartTimeRange)}`;
     if (tableQueryKeyRef.current !== queryKey) {
       tableQueryKeyRef.current = queryKey;
       setTablePrevCursors([]);
@@ -517,7 +540,7 @@ function SensorsContent() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, viewMode, activeDeviceIds, chartTimeRange, tableCursor]);
+  }, [viewMode, activeDeviceIds, chartTimeRange, tableCursor]);
 
   // Use selectedStationIds for filtering - show all selected stations for comparison
   // Ensure at least one station is displayed
@@ -567,7 +590,7 @@ function SensorsContent() {
     allReadings.sort((a, b) => a.timestamp - b.timestamp);
 
     // Group readings by time (same second) so all stations appear in the same data point
-    const groupedByTime = new Map<number, Map<string, { pm25: number; pm10: number }>>();
+    const groupedByTime = new Map<number, Map<string, { pm25: number | null; pm10: number | null }>>();
 
     allReadings.forEach(({ timestamp, reading, stationName }) => {
       const ts = Math.floor(timestamp / 1000) * 1000;
@@ -576,14 +599,14 @@ function SensorsContent() {
         groupedByTime.set(ts, new Map());
       }
 
-      const pm25 = extractReadingValue(reading, ["pm2_5", "PM2.5", "PM2_5"]);
-      const pm10 = extractReadingValue(reading, ["pm10", "PM10", "pm10_0", "PM10_0"]);
+      const pm25 = extractReadingValueOrNull(reading, ["pm2_5", "PM2.5", "PM2_5"]);
+      const pm10 = extractReadingValueOrNull(reading, ["pm10", "PM10", "pm10_0", "PM10_0"]);
       groupedByTime.get(ts)!.set(stationName, { pm25, pm10 });
     });
 
     // Convert to array format
     return Array.from(groupedByTime.entries()).map(([ts, stationValues]) => {
-      const dataPoint: Record<string, number | string> = { ts, time: formatAxisTime(ts) };
+      const dataPoint: ChartPoint = { ts, time: formatAxisTime(ts) };
       stationValues.forEach((values, stationName) => {
         dataPoint[`${stationName} - PM2.5`] = values.pm25;
         dataPoint[`${stationName} - PM10`] = values.pm10;
@@ -595,7 +618,7 @@ function SensorsContent() {
   // Generate separate PM2.5 data - grouped by time to show all stations together
   const pm25Data = useMemo(() => {
     if (displayStations.length === 0) return [];
-    
+
     // Collect all readings with their timestamps
     const allReadings: Array<{ timestamp: number; reading: SensorReading; stationName: string }> = [];
     displayStations.forEach(station => {
@@ -604,27 +627,27 @@ function SensorsContent() {
         allReadings.push({ timestamp, reading, stationName: station.name });
       });
     });
-    
+
     // Sort by timestamp
     allReadings.sort((a, b) => a.timestamp - b.timestamp);
-    
+
     // Group readings by time (same second) so all stations appear in the same data point
-    const groupedByTime = new Map<number, Map<string, number>>();
-    
+    const groupedByTime = new Map<number, Map<string, number | null>>();
+
     allReadings.forEach(({ timestamp, reading, stationName }) => {
       const ts = Math.floor(timestamp / 1000) * 1000;
-      
+
       if (!groupedByTime.has(ts)) {
         groupedByTime.set(ts, new Map());
       }
-      
-      const value = extractReadingValue(reading, ['pm2_5', 'PM2.5', 'PM2_5']);
+
+      const value = extractReadingValueOrNull(reading, ['pm2_5', 'PM2.5', 'PM2_5']);
       groupedByTime.get(ts)!.set(stationName, value);
     });
-    
+
     // Convert to array format
     return Array.from(groupedByTime.entries()).map(([ts, stationValues]) => {
-      const dataPoint: Record<string, number | string> = { ts, time: formatAxisTime(ts) };
+      const dataPoint: ChartPoint = { ts, time: formatAxisTime(ts) };
       stationValues.forEach((value, stationName) => {
         dataPoint[stationName] = value;
       });
@@ -635,7 +658,7 @@ function SensorsContent() {
   // Generate separate PM10 data - grouped by time to show all stations together
   const pm10Data = useMemo(() => {
     if (displayStations.length === 0) return [];
-    
+
     // Collect all readings with their timestamps
     const allReadings: Array<{ timestamp: number; reading: SensorReading; stationName: string }> = [];
     displayStations.forEach(station => {
@@ -644,27 +667,27 @@ function SensorsContent() {
         allReadings.push({ timestamp, reading, stationName: station.name });
       });
     });
-    
+
     // Sort by timestamp
     allReadings.sort((a, b) => a.timestamp - b.timestamp);
-    
+
     // Group readings by time (same second) so all stations appear in the same data point
-    const groupedByTime = new Map<number, Map<string, number>>();
-    
+    const groupedByTime = new Map<number, Map<string, number | null>>();
+
     allReadings.forEach(({ timestamp, reading, stationName }) => {
       const ts = Math.floor(timestamp / 1000) * 1000;
-      
+
       if (!groupedByTime.has(ts)) {
         groupedByTime.set(ts, new Map());
       }
-      
-      const value = extractReadingValue(reading, ['pm10', 'PM10', 'pm10_0', 'PM10_0']);
+
+      const value = extractReadingValueOrNull(reading, ['pm10', 'PM10', 'pm10_0', 'PM10_0']);
       groupedByTime.get(ts)!.set(stationName, value);
     });
-    
+
     // Convert to array format
     return Array.from(groupedByTime.entries()).map(([ts, stationValues]) => {
-      const dataPoint: Record<string, number | string> = { ts, time: formatAxisTime(ts) };
+      const dataPoint: ChartPoint = { ts, time: formatAxisTime(ts) };
       stationValues.forEach((value, stationName) => {
         dataPoint[stationName] = value;
       });
@@ -675,7 +698,7 @@ function SensorsContent() {
   // Generate temperature time series data - grouped by time to show all stations together
   const temperatureData = useMemo(() => {
     if (displayStations.length === 0) return [];
-    
+
     // Collect all readings with their timestamps
     const allReadings: Array<{ timestamp: number; reading: SensorReading; stationName: string }> = [];
     displayStations.forEach(station => {
@@ -684,27 +707,27 @@ function SensorsContent() {
         allReadings.push({ timestamp, reading, stationName: station.name });
       });
     });
-    
+
     // Sort by timestamp
     allReadings.sort((a, b) => a.timestamp - b.timestamp);
-    
+
     // Group readings by time (same second) so all stations appear in the same data point
-    const groupedByTime = new Map<number, Map<string, number>>();
-    
+    const groupedByTime = new Map<number, Map<string, number | null>>();
+
     allReadings.forEach(({ timestamp, reading, stationName }) => {
       const ts = Math.floor(timestamp / 1000) * 1000;
-      
+
       if (!groupedByTime.has(ts)) {
         groupedByTime.set(ts, new Map());
       }
-      
-      const value = extractReadingValue(reading, ['temperature', 'Temperature', 'temp']);
+
+      const value = extractReadingValueOrNull(reading, ['temperature', 'Temperature', 'temp']);
       groupedByTime.get(ts)!.set(stationName, value);
     });
-    
+
     // Convert to array format
     return Array.from(groupedByTime.entries()).map(([ts, stationValues]) => {
-      const dataPoint: Record<string, number | string> = { ts, time: formatAxisTime(ts) };
+      const dataPoint: ChartPoint = { ts, time: formatAxisTime(ts) };
       stationValues.forEach((value, stationName) => {
         dataPoint[stationName] = value;
       });
@@ -715,7 +738,7 @@ function SensorsContent() {
   // Generate humidity time series data - grouped by time to show all stations together
   const humidityData = useMemo(() => {
     if (displayStations.length === 0) return [];
-    
+
     // Collect all readings with their timestamps
     const allReadings: Array<{ timestamp: number; reading: SensorReading; stationName: string }> = [];
     displayStations.forEach(station => {
@@ -724,27 +747,27 @@ function SensorsContent() {
         allReadings.push({ timestamp, reading, stationName: station.name });
       });
     });
-    
+
     // Sort by timestamp
     allReadings.sort((a, b) => a.timestamp - b.timestamp);
-    
+
     // Group readings by time (same second) so all stations appear in the same data point
-    const groupedByTime = new Map<number, Map<string, number>>();
-    
+    const groupedByTime = new Map<number, Map<string, number | null>>();
+
     allReadings.forEach(({ timestamp, reading, stationName }) => {
       const ts = Math.floor(timestamp / 1000) * 1000;
-      
+
       if (!groupedByTime.has(ts)) {
         groupedByTime.set(ts, new Map());
       }
-      
-      const value = extractReadingValue(reading, ['humidity', 'Humidity']);
+
+      const value = extractReadingValueOrNull(reading, ['humidity', 'Humidity']);
       groupedByTime.get(ts)!.set(stationName, value);
     });
-    
+
     // Convert to array format
     return Array.from(groupedByTime.entries()).map(([ts, stationValues]) => {
-      const dataPoint: Record<string, number | string> = { ts, time: formatAxisTime(ts) };
+      const dataPoint: ChartPoint = { ts, time: formatAxisTime(ts) };
       stationValues.forEach((value, stationName) => {
         dataPoint[stationName] = value;
       });
@@ -755,7 +778,7 @@ function SensorsContent() {
   // Generate merged temperature and humidity data - grouped by time to show all stations together
   const tempHumidityMergedData = useMemo(() => {
     if (displayStations.length === 0 || !tempHumidityMerged) return [];
-    
+
     // Collect all readings with their timestamps
     const allReadings: Array<{ timestamp: number; reading: SensorReading; stationName: string }> = [];
     displayStations.forEach(station => {
@@ -764,28 +787,31 @@ function SensorsContent() {
         allReadings.push({ timestamp, reading, stationName: station.name });
       });
     });
-    
+
     // Sort by timestamp
     allReadings.sort((a, b) => a.timestamp - b.timestamp);
-    
+
     // Group readings by time (same second) so all stations appear in the same data point
-    const groupedByTime = new Map<number, Map<string, { temperature: number; humidity: number }>>();
-    
+    const groupedByTime = new Map<
+      number,
+      Map<string, { temperature: number | null; humidity: number | null }>
+    >();
+
     allReadings.forEach(({ timestamp, reading, stationName }) => {
       const ts = Math.floor(timestamp / 1000) * 1000;
-      
+
       if (!groupedByTime.has(ts)) {
         groupedByTime.set(ts, new Map());
       }
-      
-      const temperature = extractReadingValue(reading, ['temperature', 'Temperature', 'temp']);
-      const humidity = extractReadingValue(reading, ['humidity', 'Humidity']);
+
+      const temperature = extractReadingValueOrNull(reading, ['temperature', 'Temperature', 'temp']);
+      const humidity = extractReadingValueOrNull(reading, ['humidity', 'Humidity']);
       groupedByTime.get(ts)!.set(stationName, { temperature, humidity });
     });
-    
+
     // Convert to array format
     return Array.from(groupedByTime.entries()).map(([ts, stationValues]) => {
-      const dataPoint: Record<string, number | string> = { ts, time: formatAxisTime(ts) };
+      const dataPoint: ChartPoint = { ts, time: formatAxisTime(ts) };
       stationValues.forEach((values, stationName) => {
         dataPoint[`${stationName} - Temperature (°C)`] = values.temperature;
         dataPoint[`${stationName} - Humidity (%)`] = values.humidity;
@@ -794,20 +820,38 @@ function SensorsContent() {
     });
   }, [displayStations, tempHumidityMerged, graphReadingsFor]);
 
+  // Shared zoom coordinate system for the scrubber and every chart.
+  // The requested window and the returned buckets do not coincide: daily buckets
+  // (30D / 1Y) are floored to local midnight, so the first bucket starts *before*
+  // meta.window.start and the last one ends well before `now`. Using the window
+  // alone made the scrubber address a range the charts clipped; using the data
+  // alone made the scrubber unable to reach the edges of the requested window.
+  // Take the union so both agree.
   const timelineExtent = useMemo((): [number, number] | null => {
+    let start: number | null = null;
+    let end: number | null = null;
+
     if (seriesMeta?.window?.start && seriesMeta?.window?.end) {
-      const start = new Date(seriesMeta.window.start).getTime();
-      const end = new Date(seriesMeta.window.end).getTime();
-      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-        return [start, end];
+      const winStart = new Date(seriesMeta.window.start).getTime();
+      const winEnd = new Date(seriesMeta.window.end).getTime();
+      if (Number.isFinite(winStart) && Number.isFinite(winEnd) && winEnd > winStart) {
+        start = winStart;
+        end = winEnd;
       }
     }
 
     const timestamps = pm25Data
       .map((row) => Number(row.ts))
       .filter((ts) => Number.isFinite(ts));
-    if (timestamps.length === 0) return null;
-    return [Math.min(...timestamps), Math.max(...timestamps)];
+    if (timestamps.length > 0) {
+      const dataStart = Math.min(...timestamps);
+      const dataEnd = Math.max(...timestamps);
+      start = start === null ? dataStart : Math.min(start, dataStart);
+      end = end === null ? dataEnd : Math.max(end, dataEnd);
+    }
+
+    if (start === null || end === null || end <= start) return null;
+    return [start, end];
   }, [pm25Data, seriesMeta]);
 
   // Prepare table data from all readings (sorted newest first)
@@ -918,48 +962,53 @@ function SensorsContent() {
 
   const tablePageNumber = tablePrevCursors.length + 1;
 
-  // Now we can do conditional returns AFTER all hooks
-  if (!isAuthenticated) {
-    return null;
-  }
-
+  // Conditional returns, AFTER all hooks.
+  //
+  // Every one of these renders *inside* AppShell. They used to return bare
+  // full-screen elements, so switching stations from the sidebar tore the
+  // header and sidebar off the screen and rebuilt them — which read as a full
+  // page reload even though the navigation was entirely client-side. Only the
+  // content area changes now.
   if (isLoading) {
-    return (
-      <LoadingState
-        fill
-        variant="overlay"
-        message="Loading sensor data"
-        hint="Fetching chart series from aggregated buckets"
-        className="min-h-screen"
-      />
-    );
+    return <SensorsShellFallback hint="Fetching chart series from aggregated buckets" />;
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-red-600 mb-2">Error loading sensor data</p>
-          <p className="text-sm text-gray-600">{error}</p>
+      <SensorsShell>
+        <div className="flex h-[calc(100vh-var(--app-header-height))] items-center justify-center">
+          <div className="text-center">
+            <p className="mb-2 text-destructive">Error loading sensor data</p>
+            <p className="text-sm text-muted-foreground">{error}</p>
+          </div>
         </div>
-      </div>
+      </SensorsShell>
     );
   }
 
   if (displayStations.length === 0) {
+    // Selecting a station the page hasn't fetched yet empties displayStations
+    // until its series lands. That gap is a load, not an absence — the fetch is
+    // non-blocking (it keeps the existing charts up when refreshing the same
+    // selection), so isLoading is false here and the empty state would flash
+    // "no sensor data" at someone who just clicked a perfectly healthy sensor.
+    if (activeDeviceIds.length > 0) {
+      return <SensorsShellFallback hint="Fetching chart series for the selected station" />;
+    }
+
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-gray-600">No sensor data available</p>
+      <SensorsShell>
+        <div className="flex h-[calc(100vh-var(--app-header-height))] items-center justify-center">
+          <p className="text-muted-foreground">No sensor data available</p>
         </div>
-      </div>
+      </SensorsShell>
     );
   }
 
   const toggleStation = async (deviceId: string) => {
     // Check if this device's data is already loaded
     const existingStation = stations.find(s => s.id === deviceId);
-    
+
     if (existingStation) {
       // Device data is already loaded, just toggle selection
       setSelectedStationIds(prev => {
@@ -1138,7 +1187,7 @@ function SensorsContent() {
       temperature: 4, // Start from fifth color
       humidity: 6,   // Start from seventh color
     };
-    
+
     const colorIndex = (stationIndex + (graphColorOffsets[graphType] || 0)) % colorPalette.length;
     return colorPalette[colorIndex];
   };
@@ -1156,10 +1205,10 @@ function SensorsContent() {
     if (active && payload && payload.length) {
       // Get the time from the label or payload
       const timeValue = label ?? payload[0]?.payload?.ts ?? payload[0]?.payload?.time;
-      
+
       // Collect all entries from payload (these are the data series that have values at this point)
       const allEntries = new Map<string, { name: string; value: any; color: string }>();
-      
+
       // Add all entries from the payload (Recharts with shared=true will include all series)
       payload.forEach((entry: any) => {
         if (entry.dataKey && entry.value !== undefined && entry.value !== null) {
@@ -1170,19 +1219,19 @@ function SensorsContent() {
           });
         }
       });
-      
+
       // If we have the full data array and want to show all stations even if they don't have data at this exact time,
       // find all data points at this time and aggregate
       if (data && Array.isArray(data) && displayStations.length > 1) {
         // Find all data points at this exact time
         const dataPointsAtTime = data.filter((d: any) => (d.ts ?? d.time) === timeValue);
-        
+
         // For each station, find its value at this time
         displayStations.forEach((station) => {
           // Check if this station's data is already in the payload
           const stationKey = station.name;
           const hasInPayload = payload.some((p: any) => p.dataKey === stationKey);
-          
+
           if (!hasInPayload) {
             // Look for this station's value in data points at this time
             for (const dataPoint of dataPointsAtTime) {
@@ -1201,16 +1250,16 @@ function SensorsContent() {
           }
         });
       }
-      
+
       // Get time label
       const dataPoint = payload[0]?.payload;
       let timeLabel: string;
-      
+
       timeLabel = formatTooltipTime(timeValue);
-      
+
       // Sort entries by station name for consistent display
       const sortedEntries = Array.from(allEntries.values()).sort((a, b) => a.name.localeCompare(b.name));
-      
+
       return (
         <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg max-h-[400px] overflow-y-auto">
           <p className="font-semibold mb-2">Time: {timeLabel}</p>
@@ -1234,7 +1283,7 @@ function SensorsContent() {
   };
 
   const renderCombinedPMChart = (
-    data: Record<string, number | string>[],
+    data: ChartPoint[],
     yAxisLabel: string,
     getPm25Color: (station: StationData, index: number) => string,
     getPm10Color: (station: StationData, index: number) => string,
@@ -1256,6 +1305,7 @@ function SensorsContent() {
         onZoomDomainChange={setZoomDomain}
         tooltipContent={CustomTooltip}
         stationCount={displayStations.length}
+        fullExtent={timelineExtent}
       >
         {displayStations.flatMap((station, index) => {
           const pm25Color = getPm25Color(station, index);
@@ -1271,7 +1321,6 @@ function SensorsContent() {
               fill={pm25Color}
               fillOpacity={pm25Opacity}
               strokeWidth={strokeWidth}
-              connectNulls
               {...dotProps}
             />,
             <DataComponent
@@ -1283,7 +1332,6 @@ function SensorsContent() {
               fillOpacity={pm10Opacity}
               strokeWidth={strokeWidth}
               strokeDasharray={pm10DashArray}
-              connectNulls
               {...dotProps}
             />,
           ];
@@ -1293,7 +1341,7 @@ function SensorsContent() {
   };
 
   const renderTimeSeriesChart = (
-    data: Record<string, number | string>[],
+    data: ChartPoint[],
     yAxisLabel: string,
     getColor: (station: StationData, index: number) => string,
     chartType: ChartType
@@ -1313,6 +1361,7 @@ function SensorsContent() {
         onZoomDomainChange={setZoomDomain}
         tooltipContent={CustomTooltip}
         stationCount={displayStations.length}
+        fullExtent={timelineExtent}
       >
         {displayStations.map((station, index) => {
           const color = getColor(station, index);
@@ -1333,7 +1382,6 @@ function SensorsContent() {
               fillOpacity={baseOpacity}
               strokeWidth={strokeWidth}
               strokeDasharray={strokeDasharray}
-              connectNulls
               {...dotProps}
             />
           );
@@ -1360,6 +1408,7 @@ function SensorsContent() {
         onZoomDomainChange={setZoomDomain}
         tooltipContent={CustomTooltip}
         stationCount={displayStations.length}
+        fullExtent={timelineExtent}
       >
         {displayStations.flatMap((station, index) => {
           const tempColor = getGraphColor("temperature", station.name, index);
@@ -1375,7 +1424,6 @@ function SensorsContent() {
               fill={tempColor}
               fillOpacity={tempOpacity}
               strokeWidth={strokeWidth}
-              connectNulls
               {...dotProps}
             />,
             <DataComponent
@@ -1387,7 +1435,6 @@ function SensorsContent() {
               fillOpacity={humidityOpacity}
               strokeWidth={strokeWidth}
               strokeDasharray={humidityDashArray}
-              connectNulls
               {...dotProps}
             />,
           ];
@@ -1408,809 +1455,802 @@ function SensorsContent() {
   const sensorPageSubtitle =
     displayStations.length > 1
       ? [displayStations.map((s) => s.name).join(" · "), formatSeriesMetaLabel(seriesMeta)]
-          .filter(Boolean)
-          .join(" · ")
+        .filter(Boolean)
+        .join(" · ")
       : seriesMeta?.last_seen_at && graphReadingsByDevice[displayStations[0]?.deviceId]?.length === 0
         ? `No recent data · last seen ${new Date(seriesMeta.last_seen_at).toLocaleString()}`
         : formatSeriesMetaLabel(seriesMeta) ?? "Charts, tables, and CSV export";
 
   return (
     <>
-    <AppShell
-      sectionLabel="Sensors"
-      title={sensorPageTitle}
-      subtitle={sensorPageSubtitle}
-      icon={Database}
-      mainClassName="bg-transparent"
-    >
-          {authLoading ? (
-            <LoadingState
-              fill
-              variant="page"
-              message="Loading sensor data"
-              hint="Preparing charts and station data"
-              className="h-[calc(100vh-3.75rem)]"
-            />
-          ) : (
-            <div className="mx-auto max-w-7xl space-y-6 p-6 md:p-8">
-        <div className="flex flex-wrap items-center justify-end gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="gap-2">
-                  <Database className="h-4 w-4" />
-                  Stations ({displayStations.length})
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 max-h-[400px] overflow-y-auto">
-                <DropdownMenuLabel>Select Stations</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={selectAllStations}>
-                  Select All
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={deselectAllStations}>
-                  Deselect All
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                {availableDevices.length === 0 ? (
-                  <DropdownMenuItem disabled>
-                    No devices available
+      <SensorsShell title={sensorPageTitle} subtitle={sensorPageSubtitle}>
+        {(
+          <div className="mx-auto max-w-7xl space-y-6 p-6 md:p-8">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="gap-2">
+                    <Database className="h-4 w-4" />
+                    Stations ({displayStations.length})
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 max-h-[400px] overflow-y-auto">
+                  <DropdownMenuLabel>Select Stations</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={selectAllStations}>
+                    Select All
                   </DropdownMenuItem>
-                ) : (
-                  availableDevices.map(({ device, location }) => {
-                    const hasData = stations.some(s => s.id === device.id);
-                    const isSelected = selectedStationIds.includes(device.id);
-                    return (
-                      <DropdownMenuCheckboxItem
-                        key={device.id}
-                        checked={isSelected}
-                        onCheckedChange={() => toggleStation(device.id)}
-                        className={!hasData ? "opacity-60" : ""}
-                      >
-                        <div className="flex items-center justify-between w-full">
-                          <span>{location.name}</span>
-                          {!hasData && (
-                            <span className="text-xs text-muted-foreground ml-2">(No data)</span>
-                          )}
-                        </div>
-                      </DropdownMenuCheckboxItem>
-                    );
-                  })
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              variant="outline"
-              onClick={() => setViewMode(viewMode === "graph" ? "table" : "graph")}
-              className="gap-2"
-            >
-              {viewMode === "graph" ? (
-                <>
-                  <TableIcon className="h-4 w-4" />
-                  Table View
-                </>
-              ) : (
-                <>
-                  <LineChartIcon className="h-4 w-4" />
-                  Graph View
-                </>
-              )}
-            </Button>
-            <Button
-              onClick={openCSVDialog}
-              className="bg-[#016FC4] hover:bg-[#015a9e] text-white"
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Export Data
-            </Button>
-          </div>
-
-        {viewMode === "graph" && (
-          <ChartTimeRangeSelector
-            value={chartTimeRange}
-            onChange={setChartTimeRange}
-            onResetZoom={() => setZoomDomain(null)}
-            zoomActive={zoomDomain !== null}
-            refreshing={seriesRefreshing}
-          />
-        )}
-
-        {viewMode === "graph" && timelineExtent && (
-          <ChartTimelineScrubber
-            minTs={timelineExtent[0]}
-            maxTs={timelineExtent[1]}
-            domain={zoomDomain}
-            onChange={setZoomDomain}
-            timeRange={chartTimeRange}
-            disabled={seriesRefreshing}
-          />
-        )}
-
-        {viewMode === "graph" && seriesMeta && (
-          <p className="text-sm text-muted-foreground">
-            {formatSeriesMetaLabel(seriesMeta)}.
-            {" "}
-            Use the timeline scrubber to scroll and zoom · scroll wheel on charts to zoom in/out.
-          </p>
-        )}
-
-        {/* Table View */}
-        {viewMode === "table" ? (
-          <Card className="border-2">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TableIcon className="h-5 w-5" />
-                Sensor Data Table
-              </CardTitle>
-              <CardDescription>
-                All sensor readings from selected stations in tabular format
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {tableLoading ? (
-                <LoadingState
-                  variant="inline"
-                  message="Loading table data"
-                  hint="Fetching raw readings via cursor pagination"
-                />
-              ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b-2 border-gray-300">
-                      <th className="text-left p-3 font-semibold text-sm">Timestamp</th>
-                      <th className="text-left p-3 font-semibold text-sm">Station</th>
-                      <th className="text-right p-3 font-semibold text-sm">PM1.0 (µg/m³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">PM2.5 (µg/m³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">PM4.0 (µg/m³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">PM10 (µg/m³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">NC0.5 (#/cm³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">NC1.0 (#/cm³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">NC2.5 (#/cm³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">NC4.0 (#/cm³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">NC10.0 (#/cm³)</th>
-                      <th className="text-right p-3 font-semibold text-sm">Typical Particle Size (µm)</th>
-                      <th className="text-right p-3 font-semibold text-sm">Temperature (°C)</th>
-                      <th className="text-right p-3 font-semibold text-sm">Humidity (%)</th>
-                      <th className="text-right p-3 font-semibold text-sm">VOC Index</th>
-                      <th className="text-right p-3 font-semibold text-sm">NOx Index</th>
-                      <th className="text-right p-3 font-semibold text-sm">AQI</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableData.length === 0 ? (
-                      <tr>
-                        <td colSpan={17} className="text-center p-8 text-muted-foreground">
-                          No sensor data available
-                        </td>
-                      </tr>
-                    ) : (
-                      tableData.map((row, index) => (
-                        <tr
-                          key={`${row.station.id}-${row.timestamp}-${index}`}
-                          className="border-b border-gray-200 hover:bg-gray-50 transition-colors"
+                  <DropdownMenuItem onClick={deselectAllStations}>
+                    Deselect All
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {availableDevices.length === 0 ? (
+                    <DropdownMenuItem disabled>
+                      No devices available
+                    </DropdownMenuItem>
+                  ) : (
+                    availableDevices.map(({ device, location }) => {
+                      const hasData = stations.some(s => s.id === device.id);
+                      const isSelected = selectedStationIds.includes(device.id);
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={device.id}
+                          checked={isSelected}
+                          onCheckedChange={() => toggleStation(device.id)}
+                          className={!hasData ? "opacity-60" : ""}
                         >
-                          <td className="p-3 text-sm">{row.timestampLocal}</td>
-                          <td className="p-3 text-sm font-medium">{row.station.name}</td>
-                          <td className="p-3 text-sm text-right">{row.pm1?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.pm25?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.pm4?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.pm10?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.nc0_5?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.nc1_0?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.nc2_5?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.nc4_0?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.nc10_0?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.typicalParticleSize?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.temperature?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.humidity?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.voc?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right">{row.nox?.toFixed(2) ?? "—"}</td>
-                          <td className="p-3 text-sm text-right font-semibold">{row.aqi ?? "—"}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              )}
-              {!tableLoading && tableData.length > 0 && (
-                <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-muted-foreground">
-                  <div>
-                    Showing {tableData.length} reading{tableData.length !== 1 ? "s" : ""} from{" "}
-                    {displayStations.length} station{displayStations.length !== 1 ? "s" : ""}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={tablePrevCursors.length === 0}
-                      onClick={goToPreviousTablePage}
-                    >
-                      Previous
-                    </Button>
-                    <span>Page {tablePageNumber}</span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!tableNextCursor}
-                      onClick={goToNextTablePage}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
-          <div className={seriesRefreshing ? "space-y-6 opacity-70 transition-opacity duration-200" : "space-y-6 transition-opacity duration-200"}>
-            {/* PM Charts - Merged or Separate */}
-            {pmMerged ? (
-              /* Combined PM2.5 & PM10 Time Series Chart */
+                          <div className="flex items-center justify-between w-full">
+                            <span>{location.name}</span>
+                            {!hasData && (
+                              <span className="text-xs text-muted-foreground ml-2">(No data)</span>
+                            )}
+                          </div>
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                variant="outline"
+                onClick={() => setViewMode(viewMode === "graph" ? "table" : "graph")}
+                className="gap-2"
+              >
+                {viewMode === "graph" ? (
+                  <>
+                    <TableIcon className="h-4 w-4" />
+                    Table View
+                  </>
+                ) : (
+                  <>
+                    <LineChartIcon className="h-4 w-4" />
+                    Graph View
+                  </>
+                )}
+              </Button>
+              <Button
+                onClick={openCSVDialog}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Data
+              </Button>
+            </div>
+
+            {viewMode === "graph" && (
+              <ChartTimeRangeSelector
+                value={chartTimeRange}
+                onChange={setChartTimeRange}
+                onResetZoom={() => setZoomDomain(null)}
+                zoomActive={zoomDomain !== null}
+                refreshing={seriesRefreshing}
+              />
+            )}
+
+            {viewMode === "graph" && timelineExtent && (
+              <ChartTimelineScrubber
+                minTs={timelineExtent[0]}
+                maxTs={timelineExtent[1]}
+                domain={zoomDomain}
+                onChange={setZoomDomain}
+                timeRange={chartTimeRange}
+                disabled={seriesRefreshing}
+              />
+            )}
+
+            {viewMode === "graph" && seriesMeta && (
+              <p className="text-sm text-muted-foreground">
+                {formatSeriesMetaLabel(seriesMeta)}.
+                {" "}
+                Use the timeline scrubber to scroll and zoom · scroll wheel on charts to zoom in/out.
+              </p>
+            )}
+
+            {/* Table View */}
+            {viewMode === "table" ? (
               <Card className="border-2">
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="flex items-center gap-2">
-                        <Merge className="h-5 w-5 text-purple-600" />
-                        PM2.5 & PM10 Concentration ({chartRangeTitle})
-                      </CardTitle>
-                      <CardDescription>
-                        Fine (PM2.5) and coarse (PM10) particulate matter levels over the last 24 hours. 
-                        WHO guidelines: PM2.5 ≤12 µg/m³, PM10 ≤20 µg/m³
-                      </CardDescription>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1 border-r pr-2 mr-2">
-                        <span className="text-xs text-muted-foreground mr-1">PM2.5:</span>
-                        {displayStations.map((station, index) => (
-                          <input
-                            key={`pm25-${station.id}`}
-                            type="color"
-                            value={getGraphColor('pm25', station.name, index)}
-                            onChange={(e) => {
-                              setPm25Colors({
-                                ...pm25Colors,
-                                [station.name]: e.target.value,
-                              });
-                            }}
-                            className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
-                            title={`Change PM2.5 color for ${station.name}`}
-                          />
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs text-muted-foreground mr-1">PM10:</span>
-                        {displayStations.map((station, index) => (
-                          <input
-                            key={`pm10-${station.id}`}
-                            type="color"
-                            value={getGraphColor('pm10', station.name, index)}
-                            onChange={(e) => {
-                              setPm10Colors({
-                                ...pm10Colors,
-                                [station.name]: e.target.value,
-                              });
-                            }}
-                            className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
-                            title={`Change PM10 color for ${station.name}`}
-                          />
-                        ))}
-                      </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" size="sm" className="gap-2">
-                            {getChartIcon(pmMergedChartType)}
-                            {pmMergedChartType.charAt(0).toUpperCase() + pmMergedChartType.slice(1)}
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => setPmMergedChartType("line")}>
-                            <LineChartIcon className="h-4 w-4 mr-2" />
-                            Line Chart
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setPmMergedChartType("area")}>
-                            <AreaChartIcon className="h-4 w-4 mr-2" />
-                            Area Chart
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setPmMergedChartType("bar")}>
-                            <BarChartIcon className="h-4 w-4 mr-2" />
-                            Bar Chart
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setPmMerged(false)}
-                        className="gap-2"
-                      >
-                        <X className="h-4 w-4" />
-                        Unmerge
-                      </Button>
-                    </div>
-                  </div>
+                  <CardTitle className="flex items-center gap-2">
+                    <TableIcon className="h-5 w-5" />
+                    Sensor Data Table
+                  </CardTitle>
+                  <CardDescription>
+                    All sensor readings from selected stations in tabular format
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {renderCombinedPMChart(
-                    pmData,
-                    "µg/m³",
-                    (station, index) => getGraphColor('pm25', station.name, index),
-                    (station, index) => getGraphColor('pm10', station.name, index),
-                    pmMergedChartType
+                  {tableLoading ? (
+                    <LoadingState
+                      variant="inline"
+                      message="Loading table data"
+                      hint="Fetching raw readings via cursor pagination"
+                    />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse">
+                        <thead>
+                          <tr className="border-b-2 border-gray-300">
+                            <th className="text-left p-3 font-semibold text-sm">Timestamp</th>
+                            <th className="text-left p-3 font-semibold text-sm">Station</th>
+                            <th className="text-right p-3 font-semibold text-sm">PM1.0 (µg/m³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">PM2.5 (µg/m³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">PM4.0 (µg/m³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">PM10 (µg/m³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">NC0.5 (#/cm³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">NC1.0 (#/cm³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">NC2.5 (#/cm³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">NC4.0 (#/cm³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">NC10.0 (#/cm³)</th>
+                            <th className="text-right p-3 font-semibold text-sm">Typical Particle Size (µm)</th>
+                            <th className="text-right p-3 font-semibold text-sm">Temperature (°C)</th>
+                            <th className="text-right p-3 font-semibold text-sm">Humidity (%)</th>
+                            <th className="text-right p-3 font-semibold text-sm">VOC Index</th>
+                            <th className="text-right p-3 font-semibold text-sm">NOx Index</th>
+                            <th className="text-right p-3 font-semibold text-sm">AQI</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tableData.length === 0 ? (
+                            <tr>
+                              <td colSpan={17} className="text-center p-8 text-muted-foreground">
+                                No sensor data available
+                              </td>
+                            </tr>
+                          ) : (
+                            tableData.map((row, index) => (
+                              <tr
+                                key={`${row.station.id}-${row.timestamp}-${index}`}
+                                className="border-b border-gray-200 hover:bg-gray-50 transition-colors"
+                              >
+                                <td className="p-3 text-sm">{row.timestampLocal}</td>
+                                <td className="p-3 text-sm font-medium">{row.station.name}</td>
+                                <td className="p-3 text-sm text-right">{row.pm1?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.pm25?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.pm4?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.pm10?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.nc0_5?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.nc1_0?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.nc2_5?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.nc4_0?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.nc10_0?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.typicalParticleSize?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.temperature?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.humidity?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.voc?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right">{row.nox?.toFixed(2) ?? "—"}</td>
+                                <td className="p-3 text-sm text-right font-semibold">{row.aqi ?? "—"}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {!tableLoading && tableData.length > 0 && (
+                    <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-muted-foreground">
+                      <div>
+                        Showing {tableData.length} reading{tableData.length !== 1 ? "s" : ""} from{" "}
+                        {displayStations.length} station{displayStations.length !== 1 ? "s" : ""}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={tablePrevCursors.length === 0}
+                          onClick={goToPreviousTablePage}
+                        >
+                          Previous
+                        </Button>
+                        <span>Page {tablePageNumber}</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!tableNextCursor}
+                          onClick={goToNextTablePage}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
                   )}
                 </CardContent>
               </Card>
             ) : (
-              <>
-                {/* PM2.5 Time Series Chart */}
-                <Card className="border-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <AlertCircle className="h-5 w-5 text-blue-600" />
-                      PM2.5 Concentration ({chartRangeTitle})
-                    </CardTitle>
-                    <CardDescription>
-                      Fine particulate matter levels over the last 24 hours. WHO guideline: ≤12 µg/m³
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {displayStations.map((station, index) => (
-                      <input
-                        key={station.id}
-                        type="color"
-                        value={getGraphColor('pm25', station.name, index)}
-                        onChange={(e) => {
-                          setPm25Colors({
-                            ...pm25Colors,
-                            [station.name]: e.target.value,
-                          });
-                        }}
-                        className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
-                        title={`Change PM2.5 color for ${station.name}`}
-                      />
-                    ))}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                          {getChartIcon(pm25ChartType)}
-                          {pm25ChartType.charAt(0).toUpperCase() + pm25ChartType.slice(1)}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => setPm25ChartType("line")}>
-                          <LineChartIcon className="h-4 w-4 mr-2" />
-                          Line Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setPm25ChartType("area")}>
-                          <AreaChartIcon className="h-4 w-4 mr-2" />
-                          Area Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setPm25ChartType("bar")}>
-                          <BarChartIcon className="h-4 w-4 mr-2" />
-                          Bar Chart
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPmMerged(true)}
-                      className="gap-2"
-                    >
-                      <Merge className="h-4 w-4" />
-                      Merge with PM10
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {renderTimeSeriesChart(
-                  pm25Data,
-                  "µg/m³",
-                  (station, index) => getGraphColor('pm25', station.name, index),
-                  pm25ChartType
-                )}
-              </CardContent>
-            </Card>
+              <div className={seriesRefreshing ? "space-y-6 opacity-70 transition-opacity duration-200" : "space-y-6 transition-opacity duration-200"}>
+                {/* PM Charts - Merged or Separate */}
+                {pmMerged ? (
+                  /* Combined PM2.5 & PM10 Time Series Chart */
+                  <Card className="border-2">
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="flex items-center gap-2">
+                            <Merge className="h-5 w-5 text-teal-600" />
+                            PM2.5 & PM10 Concentration ({chartRangeTitle})
+                          </CardTitle>
+                          <CardDescription>
+                            Fine (PM2.5) and coarse (PM10) particulate matter levels over the last 24 hours.
+                            WHO guidelines: PM2.5 ≤12 µg/m³, PM10 ≤20 µg/m³
+                          </CardDescription>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1 border-r pr-2 mr-2">
+                            <span className="text-xs text-muted-foreground mr-1">PM2.5:</span>
+                            {displayStations.map((station, index) => (
+                              <input
+                                key={`pm25-${station.id}`}
+                                type="color"
+                                value={getGraphColor('pm25', station.name, index)}
+                                onChange={(e) => {
+                                  setPm25Colors({
+                                    ...pm25Colors,
+                                    [station.name]: e.target.value,
+                                  });
+                                }}
+                                className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                title={`Change PM2.5 color for ${station.name}`}
+                              />
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-muted-foreground mr-1">PM10:</span>
+                            {displayStations.map((station, index) => (
+                              <input
+                                key={`pm10-${station.id}`}
+                                type="color"
+                                value={getGraphColor('pm10', station.name, index)}
+                                onChange={(e) => {
+                                  setPm10Colors({
+                                    ...pm10Colors,
+                                    [station.name]: e.target.value,
+                                  });
+                                }}
+                                className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                title={`Change PM10 color for ${station.name}`}
+                              />
+                            ))}
+                          </div>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="sm" className="gap-2">
+                                {getChartIcon(pmMergedChartType)}
+                                {pmMergedChartType.charAt(0).toUpperCase() + pmMergedChartType.slice(1)}
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => setPmMergedChartType("line")}>
+                                <LineChartIcon className="h-4 w-4 mr-2" />
+                                Line Chart
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setPmMergedChartType("area")}>
+                                <AreaChartIcon className="h-4 w-4 mr-2" />
+                                Area Chart
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setPmMergedChartType("bar")}>
+                                <BarChartIcon className="h-4 w-4 mr-2" />
+                                Bar Chart
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPmMerged(false)}
+                            className="gap-2"
+                          >
+                            <X className="h-4 w-4" />
+                            Unmerge
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {renderCombinedPMChart(
+                        pmData,
+                        "µg/m³",
+                        (station, index) => getGraphColor('pm25', station.name, index),
+                        (station, index) => getGraphColor('pm10', station.name, index),
+                        pmMergedChartType
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <>
+                    {/* PM2.5 Time Series Chart */}
+                    <Card className="border-2">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle className="flex items-center gap-2">
+                              <AlertCircle className="h-5 w-5 text-blue-600" />
+                              PM2.5 Concentration ({chartRangeTitle})
+                            </CardTitle>
+                            <CardDescription>
+                              Fine particulate matter levels over the last 24 hours. WHO guideline: ≤12 µg/m³
+                            </CardDescription>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {displayStations.map((station, index) => (
+                              <input
+                                key={station.id}
+                                type="color"
+                                value={getGraphColor('pm25', station.name, index)}
+                                onChange={(e) => {
+                                  setPm25Colors({
+                                    ...pm25Colors,
+                                    [station.name]: e.target.value,
+                                  });
+                                }}
+                                className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                title={`Change PM2.5 color for ${station.name}`}
+                              />
+                            ))}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="gap-2">
+                                  {getChartIcon(pm25ChartType)}
+                                  {pm25ChartType.charAt(0).toUpperCase() + pm25ChartType.slice(1)}
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => setPm25ChartType("line")}>
+                                  <LineChartIcon className="h-4 w-4 mr-2" />
+                                  Line Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setPm25ChartType("area")}>
+                                  <AreaChartIcon className="h-4 w-4 mr-2" />
+                                  Area Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setPm25ChartType("bar")}>
+                                  <BarChartIcon className="h-4 w-4 mr-2" />
+                                  Bar Chart
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setPmMerged(true)}
+                              className="gap-2"
+                            >
+                              <Merge className="h-4 w-4" />
+                              Merge with PM10
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        {renderTimeSeriesChart(
+                          pm25Data,
+                          "µg/m³",
+                          (station, index) => getGraphColor('pm25', station.name, index),
+                          pm25ChartType
+                        )}
+                      </CardContent>
+                    </Card>
 
-            {/* PM10 Time Series Chart */}
-            <Card className="border-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <AlertCircle className="h-5 w-5 text-blue-600" />
-                      PM10.0 Concentration ({chartRangeTitle})
-                    </CardTitle>
-                    <CardDescription>
-                      Coarse particulate matter levels over the last 24 hours. WHO guideline: ≤20 µg/m³
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {displayStations.map((station, index) => (
-                      <input
-                        key={station.id}
-                        type="color"
-                        value={getGraphColor('pm10', station.name, index)}
-                        onChange={(e) => {
-                          setPm10Colors({
-                            ...pm10Colors,
-                            [station.name]: e.target.value,
-                          });
-                        }}
-                        className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
-                        title={`Change PM10 color for ${station.name}`}
-                      />
-                    ))}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                          {getChartIcon(pm10ChartType)}
-                          {pm10ChartType.charAt(0).toUpperCase() + pm10ChartType.slice(1)}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => setPm10ChartType("line")}>
-                          <LineChartIcon className="h-4 w-4 mr-2" />
-                          Line Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setPm10ChartType("area")}>
-                          <AreaChartIcon className="h-4 w-4 mr-2" />
-                          Area Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setPm10ChartType("bar")}>
-                          <BarChartIcon className="h-4 w-4 mr-2" />
-                          Bar Chart
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPmMerged(true)}
-                      className="gap-2"
-                    >
-                      <Merge className="h-4 w-4" />
-                      Merge with PM2.5
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {renderTimeSeriesChart(
-                  pm10Data,
-                  "µg/m³",
-                  (station, index) => getGraphColor('pm10', station.name, index),
-                  pm10ChartType
+                    {/* PM10 Time Series Chart */}
+                    <Card className="border-2">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle className="flex items-center gap-2">
+                              <AlertCircle className="h-5 w-5 text-blue-600" />
+                              PM10.0 Concentration ({chartRangeTitle})
+                            </CardTitle>
+                            <CardDescription>
+                              Coarse particulate matter levels over the last 24 hours. WHO guideline: ≤20 µg/m³
+                            </CardDescription>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {displayStations.map((station, index) => (
+                              <input
+                                key={station.id}
+                                type="color"
+                                value={getGraphColor('pm10', station.name, index)}
+                                onChange={(e) => {
+                                  setPm10Colors({
+                                    ...pm10Colors,
+                                    [station.name]: e.target.value,
+                                  });
+                                }}
+                                className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                title={`Change PM10 color for ${station.name}`}
+                              />
+                            ))}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="gap-2">
+                                  {getChartIcon(pm10ChartType)}
+                                  {pm10ChartType.charAt(0).toUpperCase() + pm10ChartType.slice(1)}
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => setPm10ChartType("line")}>
+                                  <LineChartIcon className="h-4 w-4 mr-2" />
+                                  Line Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setPm10ChartType("area")}>
+                                  <AreaChartIcon className="h-4 w-4 mr-2" />
+                                  Area Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setPm10ChartType("bar")}>
+                                  <BarChartIcon className="h-4 w-4 mr-2" />
+                                  Bar Chart
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setPmMerged(true)}
+                              className="gap-2"
+                            >
+                              <Merge className="h-4 w-4" />
+                              Merge with PM2.5
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        {renderTimeSeriesChart(
+                          pm10Data,
+                          "µg/m³",
+                          (station, index) => getGraphColor('pm10', station.name, index),
+                          pm10ChartType
+                        )}
+                      </CardContent>
+                    </Card>
+                  </>
                 )}
-              </CardContent>
-            </Card>
-              </>
+
+                {/* VOC and NOx charts are intentionally not displayed (data is still collected and CSV-exported). */}
+
+                {/* Temperature and Humidity Charts */}
+                {tempHumidityMerged ? (
+                  <Card className="border-2">
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="flex items-center gap-2">
+                            <Merge className="h-5 w-5 text-teal-600" />
+                            Temperature & Humidity ({chartRangeTitle})
+                          </CardTitle>
+                          <CardDescription>
+                            Combined temperature and humidity levels over the last 24 hours
+                          </CardDescription>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="outline" size="sm" className="gap-2">
+                                {getChartIcon(tempHumidityMergedChartType)}
+                                {tempHumidityMergedChartType.charAt(0).toUpperCase() + tempHumidityMergedChartType.slice(1)}
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => setTempHumidityMergedChartType("line")}>
+                                <LineChartIcon className="h-4 w-4 mr-2" />
+                                Line Chart
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setTempHumidityMergedChartType("area")}>
+                                <AreaChartIcon className="h-4 w-4 mr-2" />
+                                Area Chart
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setTempHumidityMergedChartType("bar")}>
+                                <BarChartIcon className="h-4 w-4 mr-2" />
+                                Bar Chart
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setTempHumidityMerged(false)}
+                            className="gap-2"
+                          >
+                            <X className="h-4 w-4" />
+                            Unmerge
+                          </Button>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      {renderTempHumidityMergedChart()}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Temperature Time Series Chart */}
+                    <Card className="border-2">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle className="flex items-center gap-2">
+                              <Thermometer className="h-5 w-5 text-amber-500" />
+                              Temperature ({chartRangeTitle})
+                            </CardTitle>
+                            <CardDescription>
+                              Ambient air temperature levels over the last 24 hours
+                            </CardDescription>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {displayStations.map((station, index) => (
+                              <input
+                                key={station.id}
+                                type="color"
+                                value={getGraphColor('temperature', station.name, index)}
+                                onChange={(e) => {
+                                  setTemperatureColors({
+                                    ...temperatureColors,
+                                    [station.name]: e.target.value,
+                                  });
+                                }}
+                                className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                title={`Change Temperature color for ${station.name}`}
+                              />
+                            ))}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="gap-2">
+                                  {getChartIcon(temperatureChartType)}
+                                  {temperatureChartType.charAt(0).toUpperCase() + temperatureChartType.slice(1)}
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => setTemperatureChartType("line")}>
+                                  <LineChartIcon className="h-4 w-4 mr-2" />
+                                  Line Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setTemperatureChartType("area")}>
+                                  <AreaChartIcon className="h-4 w-4 mr-2" />
+                                  Area Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setTemperatureChartType("bar")}>
+                                  <BarChartIcon className="h-4 w-4 mr-2" />
+                                  Bar Chart
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setTempHumidityMerged(true)}
+                              className="gap-2"
+                            >
+                              <Merge className="h-4 w-4" />
+                              Merge
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        {renderTimeSeriesChart(
+                          temperatureData,
+                          "°C",
+                          (station, index) => getGraphColor('temperature', station.name, index),
+                          temperatureChartType
+                        )}
+                      </CardContent>
+                    </Card>
+
+                    {/* Humidity Time Series Chart */}
+                    <Card className="border-2">
+                      <CardHeader>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <CardTitle className="flex items-center gap-2">
+                              <Droplets className="h-5 w-5 text-blue-500" />
+                              Humidity ({chartRangeTitle})
+                            </CardTitle>
+                            <CardDescription>
+                              Relative humidity levels over the last 24 hours
+                            </CardDescription>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {displayStations.map((station, index) => (
+                              <input
+                                key={station.id}
+                                type="color"
+                                value={getGraphColor('humidity', station.name, index)}
+                                onChange={(e) => {
+                                  setHumidityColors({
+                                    ...humidityColors,
+                                    [station.name]: e.target.value,
+                                  });
+                                }}
+                                className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
+                                title={`Change Humidity color for ${station.name}`}
+                              />
+                            ))}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" className="gap-2">
+                                  {getChartIcon(humidityChartType)}
+                                  {humidityChartType.charAt(0).toUpperCase() + humidityChartType.slice(1)}
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => setHumidityChartType("line")}>
+                                  <LineChartIcon className="h-4 w-4 mr-2" />
+                                  Line Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setHumidityChartType("area")}>
+                                  <AreaChartIcon className="h-4 w-4 mr-2" />
+                                  Area Chart
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setHumidityChartType("bar")}>
+                                  <BarChartIcon className="h-4 w-4 mr-2" />
+                                  Bar Chart
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setTempHumidityMerged(true)}
+                              className="gap-2"
+                            >
+                              <Merge className="h-4 w-4" />
+                              Merge
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        {renderTimeSeriesChart(
+                          humidityData,
+                          "%",
+                          (station, index) => getGraphColor('humidity', station.name, index),
+                          humidityChartType
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+
+                {/* Network Analytics Summary */}
+                {summaryData && (
+                  <Card className="border shadow-sm mb-4">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="text-base font-semibold">Time Window Summary</CardTitle>
+                          <CardDescription className="text-xs">
+                            {summaryData.total_readings.toLocaleString()} readings across {summaryData.device_count} {summaryData.device_count === 1 ? "device" : "devices"}
+                          </CardDescription>
+                        </div>
+                        {summaryLoading && <div className="text-xs text-muted-foreground animate-pulse">Updating...</div>}
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                          <div className="text-xs font-medium text-muted-foreground">PM2.5 Average</div>
+                          <div className="text-lg font-bold mt-0.5">
+                            {summaryData.statistics.pm2_5?.avg !== null && summaryData.statistics.pm2_5?.avg !== undefined ? `${summaryData.statistics.pm2_5.avg.toFixed(1)} µg/m³` : "—"}
+                          </div>
+                          {summaryData.statistics.pm2_5?.min !== null && summaryData.statistics.pm2_5?.max !== null && (
+                            <div className="text-[10px] text-muted-foreground mt-1">
+                              Min: {summaryData.statistics.pm2_5?.min?.toFixed(1)} · Max: {summaryData.statistics.pm2_5?.max?.toFixed(1)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                          <div className="text-xs font-medium text-muted-foreground">PM10 Average</div>
+                          <div className="text-lg font-bold mt-0.5">
+                            {summaryData.statistics.pm10?.avg !== null && summaryData.statistics.pm10?.avg !== undefined ? `${summaryData.statistics.pm10.avg.toFixed(1)} µg/m³` : "—"}
+                          </div>
+                          {summaryData.statistics.pm10?.min !== null && summaryData.statistics.pm10?.max !== null && (
+                            <div className="text-[10px] text-muted-foreground mt-1">
+                              Min: {summaryData.statistics.pm10?.min?.toFixed(1)} · Max: {summaryData.statistics.pm10?.max?.toFixed(1)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                          <div className="text-xs font-medium text-muted-foreground">Avg Temperature</div>
+                          <div className="text-lg font-bold mt-0.5">
+                            {summaryData.statistics.temperature?.avg !== null && summaryData.statistics.temperature?.avg !== undefined ? `${summaryData.statistics.temperature.avg.toFixed(1)}°C` : "—"}
+                          </div>
+                        </div>
+                        <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
+                          <div className="text-xs font-medium text-muted-foreground">Avg Humidity</div>
+                          <div className="text-lg font-bold mt-0.5">
+                            {summaryData.statistics.humidity?.avg !== null && summaryData.statistics.humidity?.avg !== undefined ? `${summaryData.statistics.humidity.avg.toFixed(1)}%` : "—"}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Station Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {displayStations.map((station) => (
+                    <Card key={station.id} className={`border-2 ${!station.hasData ? "opacity-80" : ""}`}>
+                      <CardHeader>
+                        <div className="flex items-start justify-between gap-2">
+                          <CardTitle className="text-lg">{station.name}</CardTitle>
+                          {!station.hasData && (
+                            <span
+                              className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+                              title={station.lastSeenAt ? `Last reading: ${new Date(station.lastSeenAt).toLocaleString()}` : "No readings yet"}
+                            >
+                              Stale · last seen {formatLastSeen(station.lastSeenAt)}
+                            </span>
+                          )}
+                        </div>
+                        <CardDescription>
+                          {station.hasData ? "Current Readings" : "No data in selected range"}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">AQI Category:</span>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${station.hasData ? getAirQualityLevelBadgeClass(station.status) : "bg-gray-100 text-gray-600"}`}>
+                            {station.status}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-muted-foreground">AQI:</span>
+                          <span className="font-bold">{station.hasData && station.aqi !== null ? station.aqi : "—"}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-muted-foreground">PM2.5:</span>
+                          <span className="font-semibold">
+                            {station.hasData && station.pm2_5 !== null
+                              ? `${formatMetricValue(station.pm2_5)} µg/m³`
+                              : "—"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-muted-foreground">PM10:</span>
+                          <span className="font-semibold">
+                            {station.hasData && station.pm10_0 !== null
+                              ? `${formatMetricValue(station.pm10_0)} µg/m³`
+                              : "—"}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
             )}
-
-        {/* VOC and NOx charts are intentionally not displayed (data is still collected and CSV-exported). */}
-
-        {/* Temperature and Humidity Charts */}
-        {tempHumidityMerged ? (
-          <Card className="border-2">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Merge className="h-5 w-5 text-purple-600" />
-                    Temperature & Humidity ({chartRangeTitle})
-                  </CardTitle>
-                  <CardDescription>
-                    Combined temperature and humidity levels over the last 24 hours
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="sm" className="gap-2">
-                        {getChartIcon(tempHumidityMergedChartType)}
-                        {tempHumidityMergedChartType.charAt(0).toUpperCase() + tempHumidityMergedChartType.slice(1)}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => setTempHumidityMergedChartType("line")}>
-                        <LineChartIcon className="h-4 w-4 mr-2" />
-                        Line Chart
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setTempHumidityMergedChartType("area")}>
-                        <AreaChartIcon className="h-4 w-4 mr-2" />
-                        Area Chart
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => setTempHumidityMergedChartType("bar")}>
-                        <BarChartIcon className="h-4 w-4 mr-2" />
-                        Bar Chart
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setTempHumidityMerged(false)}
-                    className="gap-2"
-                  >
-                    <X className="h-4 w-4" />
-                    Unmerge
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {renderTempHumidityMergedChart()}
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Temperature Time Series Chart */}
-            <Card className="border-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Thermometer className="h-5 w-5 text-amber-500" />
-                      Temperature ({chartRangeTitle})
-                    </CardTitle>
-                    <CardDescription>
-                      Ambient air temperature levels over the last 24 hours
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {displayStations.map((station, index) => (
-                      <input
-                        key={station.id}
-                        type="color"
-                        value={getGraphColor('temperature', station.name, index)}
-                        onChange={(e) => {
-                          setTemperatureColors({
-                            ...temperatureColors,
-                            [station.name]: e.target.value,
-                          });
-                        }}
-                        className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
-                        title={`Change Temperature color for ${station.name}`}
-                      />
-                    ))}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                          {getChartIcon(temperatureChartType)}
-                          {temperatureChartType.charAt(0).toUpperCase() + temperatureChartType.slice(1)}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => setTemperatureChartType("line")}>
-                          <LineChartIcon className="h-4 w-4 mr-2" />
-                          Line Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setTemperatureChartType("area")}>
-                          <AreaChartIcon className="h-4 w-4 mr-2" />
-                          Area Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setTemperatureChartType("bar")}>
-                          <BarChartIcon className="h-4 w-4 mr-2" />
-                          Bar Chart
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setTempHumidityMerged(true)}
-                      className="gap-2"
-                    >
-                      <Merge className="h-4 w-4" />
-                      Merge
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {renderTimeSeriesChart(
-                  temperatureData,
-                  "°C",
-                  (station, index) => getGraphColor('temperature', station.name, index),
-                  temperatureChartType
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Humidity Time Series Chart */}
-            <Card className="border-2">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Droplets className="h-5 w-5 text-blue-500" />
-                      Humidity ({chartRangeTitle})
-                    </CardTitle>
-                    <CardDescription>
-                      Relative humidity levels over the last 24 hours
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {displayStations.map((station, index) => (
-                      <input
-                        key={station.id}
-                        type="color"
-                        value={getGraphColor('humidity', station.name, index)}
-                        onChange={(e) => {
-                          setHumidityColors({
-                            ...humidityColors,
-                            [station.name]: e.target.value,
-                          });
-                        }}
-                        className="w-8 h-8 rounded border border-gray-300 cursor-pointer"
-                        title={`Change Humidity color for ${station.name}`}
-                      />
-                    ))}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                          {getChartIcon(humidityChartType)}
-                          {humidityChartType.charAt(0).toUpperCase() + humidityChartType.slice(1)}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Chart Type</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => setHumidityChartType("line")}>
-                          <LineChartIcon className="h-4 w-4 mr-2" />
-                          Line Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setHumidityChartType("area")}>
-                          <AreaChartIcon className="h-4 w-4 mr-2" />
-                          Area Chart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setHumidityChartType("bar")}>
-                          <BarChartIcon className="h-4 w-4 mr-2" />
-                          Bar Chart
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setTempHumidityMerged(true)}
-                      className="gap-2"
-                    >
-                      <Merge className="h-4 w-4" />
-                      Merge
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {renderTimeSeriesChart(
-                  humidityData,
-                  "%",
-                  (station, index) => getGraphColor('humidity', station.name, index),
-                  humidityChartType
-                )}
-              </CardContent>
-            </Card>
           </div>
         )}
-
-        {/* Network Analytics Summary */}
-        {summaryData && (
-          <Card className="border shadow-sm mb-4">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base font-semibold">Time Window Summary</CardTitle>
-                  <CardDescription className="text-xs">
-                    {summaryData.total_readings.toLocaleString()} readings across {summaryData.device_count} {summaryData.device_count === 1 ? "device" : "devices"}
-                  </CardDescription>
-                </div>
-                {summaryLoading && <div className="text-xs text-muted-foreground animate-pulse">Updating...</div>}
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
-                  <div className="text-xs font-medium text-muted-foreground">PM2.5 Average</div>
-                  <div className="text-lg font-bold mt-0.5">
-                    {summaryData.statistics.pm2_5?.avg !== null && summaryData.statistics.pm2_5?.avg !== undefined ? `${summaryData.statistics.pm2_5.avg.toFixed(1)} µg/m³` : "—"}
-                  </div>
-                  {summaryData.statistics.pm2_5?.min !== null && summaryData.statistics.pm2_5?.max !== null && (
-                    <div className="text-[10px] text-muted-foreground mt-1">
-                      Min: {summaryData.statistics.pm2_5?.min?.toFixed(1)} · Max: {summaryData.statistics.pm2_5?.max?.toFixed(1)}
-                    </div>
-                  )}
-                </div>
-                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
-                  <div className="text-xs font-medium text-muted-foreground">PM10 Average</div>
-                  <div className="text-lg font-bold mt-0.5">
-                    {summaryData.statistics.pm10?.avg !== null && summaryData.statistics.pm10?.avg !== undefined ? `${summaryData.statistics.pm10.avg.toFixed(1)} µg/m³` : "—"}
-                  </div>
-                  {summaryData.statistics.pm10?.min !== null && summaryData.statistics.pm10?.max !== null && (
-                    <div className="text-[10px] text-muted-foreground mt-1">
-                      Min: {summaryData.statistics.pm10?.min?.toFixed(1)} · Max: {summaryData.statistics.pm10?.max?.toFixed(1)}
-                    </div>
-                  )}
-                </div>
-                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
-                  <div className="text-xs font-medium text-muted-foreground">Avg Temperature</div>
-                  <div className="text-lg font-bold mt-0.5">
-                    {summaryData.statistics.temperature?.avg !== null && summaryData.statistics.temperature?.avg !== undefined ? `${summaryData.statistics.temperature.avg.toFixed(1)}°C` : "—"}
-                  </div>
-                </div>
-                <div className="bg-muted/40 p-3 rounded-lg border border-border/50">
-                  <div className="text-xs font-medium text-muted-foreground">Avg Humidity</div>
-                  <div className="text-lg font-bold mt-0.5">
-                    {summaryData.statistics.humidity?.avg !== null && summaryData.statistics.humidity?.avg !== undefined ? `${summaryData.statistics.humidity.avg.toFixed(1)}%` : "—"}
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Station Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {displayStations.map((station) => (
-            <Card key={station.id} className={`border-2 ${!station.hasData ? "opacity-80" : ""}`}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-lg">{station.name}</CardTitle>
-                  {!station.hasData && (
-                    <span
-                      className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
-                      title={station.lastSeenAt ? `Last reading: ${new Date(station.lastSeenAt).toLocaleString()}` : "No readings yet"}
-                    >
-                      Stale · last seen {formatLastSeen(station.lastSeenAt)}
-                    </span>
-                  )}
-                </div>
-                <CardDescription>
-                  {station.hasData ? "Current Readings" : "No data in selected range"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-muted-foreground">AQI Category:</span>
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${station.hasData ? getAirQualityLevelBadgeClass(station.status) : "bg-gray-100 text-gray-600"}`}>
-                    {station.status}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">AQI:</span>
-                  <span className="font-bold">{station.hasData && station.aqi !== null ? station.aqi : "—"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">PM2.5:</span>
-                  <span className="font-semibold">{station.hasData ? `${station.pm2_5} µg/m³` : "—"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">PM10:</span>
-                  <span className="font-semibold">{station.hasData ? `${station.pm10_0} µg/m³` : "—"}</span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-          </div>
-        )}
-          </div>
-          )}
-    </AppShell>
+      </SensorsShell>
 
       {/* CSV Download Dialog */}
       <Dialog open={csvDialogOpen} onOpenChange={setCsvDialogOpen}>
@@ -2221,7 +2261,7 @@ function SensorsContent() {
               Select the stations, date range, and format for the export.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="space-y-4 py-4">
             {/* Station Selection */}
             <div className="space-y-2">
@@ -2301,7 +2341,7 @@ function SensorsContent() {
                     htmlFor="range-current"
                     className="text-sm font-medium leading-none cursor-pointer"
                   >
-                    Current chart range (last {chartWindowTitle(chartTimeRange).toLowerCase()})
+                    Current chart range ({chartWindowCaption(chartTimeRange)})
                   </label>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -2466,19 +2506,59 @@ function SensorsContent() {
   );
 }
 
-export default function SensorsPage() {
+/**
+ * The page chrome — header and sidebar — held constant across every state of
+ * this route so switching stations only repaints the content area.
+ */
+function SensorsShell({
+  children,
+  title = "Sensor research data",
+  subtitle = "Charts, tables, and CSV export",
+}: {
+  children: React.ReactNode;
+  title?: string;
+  subtitle?: string;
+}) {
   return (
-    <Suspense fallback={
+    <AppShell
+      sectionLabel="Sensors"
+      title={title}
+      subtitle={subtitle}
+      icon={Database}
+      mainClassName="bg-transparent"
+    >
+      {children}
+    </AppShell>
+  );
+}
+
+/** Sensors chrome with the content area swapped for a loader. */
+function SensorsShellFallback({ hint }: { hint: string }) {
+  return (
+    <SensorsShell>
       <LoadingState
         fill
-        variant="overlay"
+        variant="page"
         message="Loading sensor data"
-        hint="Initializing the sensors dashboard"
-        className="min-h-screen"
+        hint={hint}
+        className="h-[calc(100vh-var(--app-header-height))]"
       />
-    }>
-      <SensorsContent />
-    </Suspense>
+    </SensorsShell>
+  );
+}
+
+export default function SensorsPage() {
+  return (
+    // RequireAuth outside Suspense: the session is settled before any of the
+    // page's data hooks mount, so nothing fetches against an unknown session
+    // and there is one loading state instead of two nested ones.
+    <RequireAuth
+      fallback={<SensorsShellFallback hint="Verifying your session" />}
+    >
+      <Suspense fallback={<SensorsShellFallback hint="Initializing the sensors dashboard" />}>
+        <SensorsContent />
+      </Suspense>
+    </RequireAuth>
   );
 }
 

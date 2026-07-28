@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/store/authStore";
+import { RequireAuth } from "@/components/RequireAuth";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Button } from "@/components/ui/button";
@@ -537,28 +536,17 @@ function AlertsContent() {
 }
 
 export default function AlertsPage() {
-  const { isAuthenticated, isLoading } = useAuthStore();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push("/login");
-    }
-  }, [isAuthenticated, isLoading, router]);
-
-  if (!isAuthenticated && !isLoading) {
-    return null;
-  }
-
   return (
-    <AppShell
-      sectionLabel="Analytics"
-      title="Air Quality Exceedances"
-      subtitle="Review sensor readings that met or exceeded the selected threshold during the chosen time range."
-      icon={AlertTriangle}
-      mainClassName="bg-transparent"
-    >
-      <AlertsContent />
-    </AppShell>
+    <RequireAuth message="Loading alerts" hint="Verifying your session">
+      <AppShell
+        sectionLabel="Analytics"
+        title="Air Quality Exceedances"
+        subtitle="Review sensor readings that met or exceeded the selected threshold during the chosen time range."
+        icon={AlertTriangle}
+        mainClassName="bg-transparent"
+      >
+        <AlertsContent />
+      </AppShell>
+    </RequireAuth>
   );
 }

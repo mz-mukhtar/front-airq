@@ -1,5 +1,6 @@
 import { apiRequest } from './client';
 
+// Metrics the backend analytics endpoints aggregate (fixed server-side).
 export type AnalyticsMetric =
   | 'pm2_5'
   | 'pm10'
@@ -7,6 +8,15 @@ export type AnalyticsMetric =
   | 'humidity'
   | 'voc_index'
   | 'nox_index';
+
+export const ANALYTICS_METRICS: AnalyticsMetric[] = [
+  'pm2_5',
+  'pm10',
+  'temperature',
+  'humidity',
+  'voc_index',
+  'nox_index',
+];
 
 export type AnalyticsTrendInterval = 'hour' | 'day' | 'week' | 'month';
 export type AnalyticsGroupBy = 'device' | 'location' | 'day' | 'week' | 'month';
@@ -444,6 +454,93 @@ export async function getAnalyticsLatest(
   }
   const query = queryParams.toString();
   return apiRequest<AnalyticsLatestResponse>(`/analytics/latest${query ? `?${query}` : ''}`, {
+    requireAuth: true,
+  });
+}
+
+// ── Diagnostics / Device Helpers ──────────────────────────────────────────────
+
+export interface MetricStatistics {
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+  count: number;
+  stddev: number | null;
+}
+
+export interface StatisticsResponse {
+  start_date: string;
+  end_date: string;
+  timezone: string;
+  statistics: Record<AnalyticsMetric, MetricStatistics>;
+}
+
+export interface PercentilesResponse {
+  start_date: string;
+  end_date: string;
+  timezone: string;
+  /** Percentile labels computed, e.g. ["p50", "p95", "p99"]. */
+  percentiles: string[];
+  metrics: Record<AnalyticsMetric, Record<string, number | null>>;
+}
+
+// Readings are stored as naive GMT+3 wall time; the analytics endpoints strip
+// the offset from aware datetimes. Addis Ababa has no DST, so shifting the
+// instant by +3h and stamping "+03:00" yields the correct wall-clock ISO.
+export function toAddisIso(date: Date): string {
+  const shifted = new Date(date.getTime() + 3 * 3600 * 1000);
+  return shifted.toISOString().replace(/\.\d{3}Z$/, '+03:00');
+}
+
+/**
+ * A per-device analytics window: either rolling (`hours` back from now) or an
+ * explicit pair of instants, which is what lets a caller ask about a period
+ * that has already ended.
+ */
+export type DeviceAnalyticsWindow =
+  | { hours: number }
+  | { start_date: string; end_date: string };
+
+/** start/end query params for a device window, however it was expressed. */
+export function deviceWindowParams(
+  deviceId: string,
+  window: DeviceAnalyticsWindow
+): URLSearchParams {
+  if ('hours' in window) {
+    const end = new Date();
+    const start = new Date(end.getTime() - window.hours * 3600 * 1000);
+    return new URLSearchParams({
+      device_id: deviceId,
+      start_date: toAddisIso(start),
+      end_date: toAddisIso(end),
+    });
+  }
+  return new URLSearchParams({
+    device_id: deviceId,
+    start_date: window.start_date,
+    end_date: window.end_date,
+  });
+}
+
+// Ungrouped statistical summary (avg/min/max/count/stddev per metric) for one
+// device over the given window.
+export async function getDeviceStatistics(
+  deviceId: string,
+  window: DeviceAnalyticsWindow
+): Promise<StatisticsResponse> {
+  const params = deviceWindowParams(deviceId, window);
+  return apiRequest<StatisticsResponse>(`/analytics/statistics?${params}`, {
+    requireAuth: true,
+  });
+}
+
+// p50/p95/p99 per metric for one device over the given window.
+export async function getDevicePercentiles(
+  deviceId: string,
+  window: DeviceAnalyticsWindow
+): Promise<PercentilesResponse> {
+  const params = deviceWindowParams(deviceId, window);
+  return apiRequest<PercentilesResponse>(`/analytics/percentiles?${params}`, {
     requireAuth: true,
   });
 }

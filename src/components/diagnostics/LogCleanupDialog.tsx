@@ -98,6 +98,12 @@ export function LogCleanupDialog() {
                   <span className="text-muted-foreground">Token Blacklist:</span>
                   <p className="font-semibold tabular-nums text-foreground">{result.results.token_blacklist}</p>
                 </div>
+                <div>
+                  <span className="text-muted-foreground">Request Logs:</span>
+                  <p className="font-semibold tabular-nums text-foreground">
+                    {result.results.request_logs ?? 0}
+                  </p>
+                </div>
               </div>
               <p className="text-[10px] text-muted-foreground pt-1">
                 Completed at: {new Date(result.results.timestamp).toLocaleTimeString()}

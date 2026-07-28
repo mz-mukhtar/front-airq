@@ -30,17 +30,11 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   // Self-contained server bundle for the Docker image.
   output: "standalone",
-  // Allow images from the backend
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'air-q-9f333037f389.herokuapp.com',
-        port: '',
-        pathname: '/**',
-      },
-    ],
-  },
+  // No images.remotePatterns: every next/image source in this app is a local
+  // file under /public. The entry that used to live here named a backend host
+  // that no longer exists, and an allowlist nothing loads from is a claim about
+  // the architecture that isn't true. Re-add one only when a remote image
+  // actually ships.
   async headers() {
     return [
       {

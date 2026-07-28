@@ -10,12 +10,12 @@ import {
   StationExplorerCard,
   type StationExplorerEntry,
 } from "@/components/stations/StationExplorer";
-import { useAuthStore } from "@/store/authStore";
+import { RequireAuth } from "@/components/RequireAuth";
 import { getSensorDevices } from "@/lib/api/sensor-devices";
-import {
-  fetchPublicDashboardData,
-  normalizeAirQualityLevel,
-} from "@/lib/utils/readings";
+import type { SensorDevice } from "@/lib/api/types";
+import { fetchPublicDashboardData } from "@/lib/utils/readings";
+import { evaluateAqi } from "@/lib/utils/aqi-standards";
+import { useAqiStandard } from "@/lib/preferences";
 import { Radio, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -24,18 +24,20 @@ type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 export default function StationsPage() {
   return (
-    <Suspense
-      fallback={
-        <LoadingState
-          fill
-          variant="page"
-          message="Loading stations"
-          className="min-h-screen"
-        />
-      }
-    >
-      <StationsPageContent />
-    </Suspense>
+    <RequireAuth message="Loading stations" hint="Verifying your session">
+      <Suspense
+        fallback={
+          <LoadingState
+            fill
+            variant="page"
+            message="Loading stations"
+            className="min-h-screen"
+          />
+        }
+      >
+        <StationsPageContent />
+      </Suspense>
+    </RequireAuth>
   );
 }
 
@@ -43,13 +45,13 @@ function StationsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const deviceParam = searchParams.get("device");
-  const { isAuthenticated } = useAuthStore();
   const [stations, setStations] = useState<StationExplorerEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const standard = useAqiStandard();
 
   useEffect(() => {
     let cancelled = false;
@@ -58,13 +60,18 @@ function StationsPageContent() {
       setLoading(true);
       setError(null);
       try {
-        const [{ locations, joined, stations: mapStations }, devices] = await Promise.all([
+        // RequireAuth guarantees a session here, but the device call is still
+        // tolerated as a failure: it only supplies optional enrichment (serial
+        // number, device status), and a stale cookie or a hiccup on that one
+        // endpoint must not cost the reader the station data that loaded fine.
+        const [publicData, devices] = await Promise.all([
           fetchPublicDashboardData(),
-          getSensorDevices(),
+          getSensorDevices().catch(() => [] as SensorDevice[]),
         ]);
 
         if (cancelled) return;
 
+        const { locations, joined, stations: mapStations } = publicData;
         const locationMap = new Map(locations.map((l) => [l.id, l]));
         const deviceMap = new Map(devices.map((d) => [d.id, d]));
         const kpiMap = new Map(joined.map((j) => [j.device_id, j]));
@@ -115,19 +122,19 @@ function StationsPageContent() {
         (s.description?.toLowerCase().includes(q) ?? false) ||
         (s.serialNumber?.toLowerCase().includes(q) ?? false);
 
-      const level = normalizeAirQualityLevel(s.airQualityLevel);
+      // Standards disagree on category names but all order them best → worst,
+      // so filter on the band's rank: best band, second band, anything worse.
+      const category = evaluateAqi(standard, s.pm2_5).category;
+      const rank = category ? standard.categories.indexOf(category) : -1;
       const matchesStatus =
         statusFilter === "All" ||
-        (statusFilter === "Good" && level === "Good") ||
-        (statusFilter === "Moderate" && level === "Moderate") ||
-        (statusFilter === "Unhealthy" &&
-          level !== "Good" &&
-          level !== "Moderate" &&
-          level !== "Unknown");
+        (statusFilter === "Good" && rank === 0) ||
+        (statusFilter === "Moderate" && rank === 1) ||
+        (statusFilter === "Unhealthy" && rank >= 2);
 
       return matchesSearch && matchesStatus;
     });
-  }, [stations, search, statusFilter]);
+  }, [stations, search, statusFilter, standard]);
 
   const selectedStation = useMemo(
     () => filtered.find((s) => s.id === selectedId) ?? filtered[0] ?? null,
@@ -194,12 +201,10 @@ function StationsPageContent() {
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [selectedId]);
 
+  // No anonymous branch: this page is behind RequireAuth, so anyone here
+  // already has a session that /sensors will accept.
   const handleViewAnalytics = (deviceId: string) => {
-    if (isAuthenticated) {
-      router.push(`/sensors?device=${deviceId}`);
-    } else {
-      router.push("/login");
-    }
+    router.push(`/sensors?device=${deviceId}`);
   };
 
   return (
@@ -216,7 +221,7 @@ function StationsPageContent() {
           variant="page"
           message="Loading stations"
           hint="Fetching locations, devices, and latest air quality readings"
-          className="min-h-[calc(100vh-3.75rem)]"
+          className="min-h-[calc(100vh-var(--app-header-height))]"
         />
       ) : error ? (
         <div className="mx-auto max-w-lg p-8 text-center">
@@ -279,7 +284,7 @@ function StationsPageContent() {
               )}
             </div>
 
-            <aside className="lg:sticky lg:top-[calc(3.75rem+1.5rem)] lg:self-start">
+            <aside className="lg:sticky lg:top-[calc(var(--app-header-height)+1.5rem)] lg:self-start">
               <StationDetailPanel
                 station={selectedStation}
                 currentIndex={selectedIndex >= 0 ? selectedIndex : 0}

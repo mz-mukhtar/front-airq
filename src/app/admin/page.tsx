@@ -36,6 +36,7 @@ import {
   Users,
   MapPin,
   Database,
+  UserPlus,
   Plus,
   Edit,
   Trash2,
@@ -45,6 +46,8 @@ import {
   Copy,
   Check,
 } from "lucide-react";
+import { WaitlistManagement } from "@/components/admin/WaitlistManagement";
+import { useWaitlistNotifications } from "@/hooks/useWaitlistNotifications";
 import { useAuthStore } from "@/store/authStore";
 import {
   getUsers,
@@ -83,7 +86,7 @@ import {
   BulkDeviceUpdateItem,
 } from "@/lib/api/types";
 
-type TabType = "users" | "locations" | "devices";
+type TabType = "users" | "waitlist" | "locations" | "devices";
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<TabType>("users");
@@ -148,6 +151,7 @@ export default function AdminDashboard() {
   const [bulkLoading, setBulkLoading] = useState(false);
 
   const refreshUser = useAuthStore((state) => state.refreshUser);
+  const { pending: pendingRequests } = useWaitlistNotifications();
   const router = useRouter();
 
   useEffect(() => {
@@ -602,6 +606,7 @@ export default function AdminDashboard() {
                 {(
                   [
                     { id: "users" as TabType, label: "Users", icon: Users },
+                    { id: "waitlist" as TabType, label: "Sign-ups", icon: UserPlus },
                     { id: "locations" as TabType, label: "Locations", icon: MapPin },
                     { id: "devices" as TabType, label: "Devices", icon: Database },
                   ] as const
@@ -618,6 +623,19 @@ export default function AdminDashboard() {
                   >
                     <Icon className="h-4 w-4" />
                     {label}
+                    {/* Same count as the sidebar badge, so the tab an admin is
+                        being sent to says how much work is waiting in it. */}
+                    {id === "waitlist" && pendingRequests > 0 && (
+                      <span
+                        className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-bold leading-none ${
+                          activeTab === id
+                            ? "bg-primary-foreground text-primary"
+                            : "bg-red-600 text-white"
+                        }`}
+                      >
+                        {pendingRequests > 99 ? "99+" : pendingRequests}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -766,7 +784,7 @@ export default function AdminDashboard() {
                                     <span
                                       className={`px-2 py-1 rounded text-xs font-medium ${
                                         user.role === "admin"
-                                          ? "bg-purple-100 text-purple-800"
+                                          ? "bg-teal-100 text-teal-800"
                                           : "bg-gray-100 text-gray-800"
                                       }`}
                                     >
@@ -816,6 +834,9 @@ export default function AdminDashboard() {
                       </CardContent>
                     </Card>
                   )}
+
+                  {/* Sign-ups Tab — self-fetching, so it sits outside fetchData */}
+                  {activeTab === "waitlist" && <WaitlistManagement />}
 
                   {/* Locations Tab */}
                   {activeTab === "locations" && (

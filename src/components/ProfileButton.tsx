@@ -19,10 +19,11 @@ export function ProfileButton({ menuClassName }: { menuClassName?: string }) {
   const { user, logout } = useAuthStore();
   const router = useRouter();
 
-  // authStore.logout() already navigates via window.location.href = "/login";
-  // no additional router.push needed here.
-  const handleLogout = () => {
-    logout();
+  // logout() awaits the server-side revocation before navigating to /login,
+  // so this must await it too — dropping the promise would reintroduce the
+  // race it exists to close.
+  const handleLogout = async () => {
+    await logout();
   };
 
   const getInitials = (email: string | undefined) => {
@@ -41,10 +42,10 @@ export function ProfileButton({ menuClassName }: { menuClassName?: string }) {
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="relative h-10 w-10 rounded-full bg-[#016FC4] hover:bg-[#0159a0]"
+          className="relative h-10 w-10 rounded-full bg-primary hover:bg-primary/90"
         >
           <Avatar className="h-10 w-10">
-            <AvatarFallback className="bg-[#016FC4] text-white">
+            <AvatarFallback className="bg-primary text-primary-foreground">
               {getInitials(user?.email)}
             </AvatarFallback>
           </Avatar>

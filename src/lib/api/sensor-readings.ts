@@ -9,9 +9,10 @@ import {
   SensorSeriesParams,
   SeriesResponse,
   PublicReadingKPI,
+  MapKPIReading,
 } from './types';
 
-export type { PublicReadingKPI };
+export type { PublicReadingKPI, MapKPIReading };
 
 // Get all sensor readings (authenticated endpoint) with comprehensive filtering
 export async function getSensorReadings(params?: SensorReadingsParams & { requireAuth?: boolean }): Promise<SensorReading[]> {
@@ -366,48 +367,43 @@ export async function createBulkSensorReadings(readings: CreateSensorReadingRequ
 /** @deprecated Use PublicReadingKPI — slim KPI without embedded location or VOC/NOx */
 export type KPIMapReading = PublicReadingKPI;
 
-async function fetchLatestKPIs(params?: {
+function kpiQuery(params?: {
   location_id?: string;
   device_id?: string;
   today_only?: boolean;
-}): Promise<PublicReadingKPI[]> {
+}): string {
   const queryParams = new URLSearchParams();
-
-  if (params?.location_id) {
-    queryParams.append('location_id', params.location_id);
-  }
-  if (params?.device_id) {
-    queryParams.append('device_id', params.device_id);
-  }
-  if (params?.today_only !== undefined) {
-    queryParams.append('today_only', params.today_only.toString());
-  }
-
+  if (params?.location_id) queryParams.append('location_id', params.location_id);
+  if (params?.device_id) queryParams.append('device_id', params.device_id);
+  if (params?.today_only !== undefined) queryParams.append('today_only', params.today_only.toString());
   const query = queryParams.toString();
-  const endpoint = `/sensor-readings/latest${query ? `?${query}` : ''}`;
-  const cacheKey = endpoint;
+  return query ? `?${query}` : '';
+}
 
-  return dedupeAsync(cacheKey, () =>
-    apiRequest<PublicReadingKPI[]>(endpoint, {
-      requireAuth: false,
-    })
+/**
+ * Public map KPIs from GET /sensor-readings/kpi-map — one row per device with
+ * embedded location details. This is the ONLY public reading endpoint; the map
+ * needs no separate /locations request.
+ */
+export async function getPublicMapKPIs(params?: {
+  location_id?: string;
+  device_id?: string;
+  today_only?: boolean;
+}): Promise<MapKPIReading[]> {
+  const endpoint = `/sensor-readings/kpi-map${kpiQuery(params)}`;
+  return dedupeAsync(endpoint, () =>
+    apiRequest<MapKPIReading[]>(endpoint, { requireAuth: false })
   );
 }
 
-/** Latest public KPIs — join with GET /locations for map coordinates */
+/** Latest per-device KPIs (slim shape) — authenticated only. */
 export async function getLatestKPIs(params?: {
   location_id?: string;
   device_id?: string;
   today_only?: boolean;
 }): Promise<PublicReadingKPI[]> {
-  return fetchLatestKPIs(params);
-}
-
-/** Alias for getLatestKPIs — /kpi-map returns the same response shape */
-export async function getKPIMapData(params?: {
-  location_id?: string;
-  device_id?: string;
-  today_only?: boolean;
-}): Promise<PublicReadingKPI[]> {
-  return fetchLatestKPIs(params);
+  const endpoint = `/sensor-readings/latest${kpiQuery(params)}`;
+  return dedupeAsync(endpoint, () =>
+    apiRequest<PublicReadingKPI[]>(endpoint, { requireAuth: true })
+  );
 }

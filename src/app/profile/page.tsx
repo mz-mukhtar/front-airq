@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
+import { RequireAuth } from "@/components/RequireAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,15 @@ import { updateCurrentUser, updatePassword } from "@/lib/api/auth";
 import { User as UserType } from "@/lib/api/types";
 
 export default function ProfilePage() {
-  const { isAuthenticated, user, refreshUser } = useAuthStore();
+  return (
+    <RequireAuth message="Loading profile" hint="Verifying your session">
+      <ProfileContent />
+    </RequireAuth>
+  );
+}
+
+function ProfileContent() {
+  const { user, refreshUser } = useAuthStore();
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -24,20 +33,17 @@ export default function ProfilePage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // No auth branch: RequireAuth mounts this only once the session is confirmed.
+  // The old version redirected on `!isAuthenticated` *without* checking
+  // isLoading, so a hard refresh bounced to /login before /auth/me had answered.
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push("/login");
-    } else if (user) {
+    if (user) {
       setName(user.name || "");
       setEmail(user.email || "");
     }
-  }, [isAuthenticated, router, user]);
+  }, [user]);
 
-  if (!isAuthenticated) {
-    return null;
-  }
-
-  const getInitials = (name: string | undefined, email: string | undefined) => {
+  const getInitials =(name: string | undefined, email: string | undefined) => {
     if (name) {
       return name
         .split(" ")
@@ -108,7 +114,7 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="h-16 bg-white border-b-2 border-[#EE4D55] flex items-center px-6">
+      <header className="h-16 bg-white border-b-2 border-destructive flex items-center px-6">
         <Button
           variant="ghost"
           onClick={() => router.push("/dashboard")}
@@ -126,7 +132,7 @@ export default function ProfilePage() {
             <CardHeader>
               <div className="flex items-center gap-6">
                 <Avatar className="h-24 w-24">
-                  <AvatarFallback className="bg-[#016FC4] text-white text-3xl">
+                  <AvatarFallback className="bg-primary text-primary-foreground text-3xl">
                     {getInitials(user?.name, user?.email)}
                   </AvatarFallback>
                 </Avatar>
@@ -204,7 +210,6 @@ export default function ProfilePage() {
                 <div className="pt-4">
                   <Button 
                     type="submit"
-                    className="bg-[#016FC4] hover:bg-[#0159a0] text-white"
                     disabled={isLoading}
                   >
                     {isLoading ? "Saving..." : "Save Changes"}
@@ -275,7 +280,6 @@ export default function ProfilePage() {
                 <div className="pt-4">
                   <Button 
                     type="submit"
-                    className="bg-[#016FC4] hover:bg-[#0159a0] text-white"
                     disabled={isLoading}
                   >
                     {isLoading ? "Updating..." : "Update Password"}

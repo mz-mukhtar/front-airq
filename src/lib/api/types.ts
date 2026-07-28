@@ -1,10 +1,32 @@
 // API Types matching the backend models
 
+import type { AqiStandardId } from '@/lib/utils/aqi-standards';
+
+export type ThemePreference = 'light' | 'dark' | 'system';
+export type LanguagePreference = 'en' | 'am';
+
+export interface UserPreferences {
+  theme?: ThemePreference;
+  language?: LanguagePreference;
+  map?: {
+    defaultZoom?: number;
+    defaultLocation?: { lat: number | null; lng: number | null } | null;
+    showStationLabels?: boolean;
+    /** Which air-quality index the map, cards and legend report against. */
+    aqiStandard?: AqiStandardId;
+  };
+  sensors?: {
+    lastSelection?: string[];
+    savedComparisons?: Array<{ id: string; name: string; deviceIds: string[] }>;
+  };
+}
+
 export interface User {
   id: string;
   name: string;
   email: string;
   role: 'admin' | 'user';
+  preferences?: UserPreferences | null;
   created_at: string;
   updated_at: string;
 }
@@ -25,12 +47,41 @@ export interface PublicReadingKPI {
   device_id: string;
   serial_number: string;
   location_id: string | null;
+  pm1_0?: number | null;
   pm2_5: number | null;
   pm10: number | null;
   humidity: number | null;
   temperature: number | null;
   air_quality_level: string | null;
   recorded_at: string;
+}
+
+/**
+ * Public map KPI: the slim KPI plus embedded location details, from the single
+ * public endpoint GET /sensor-readings/kpi-map (no separate locations request).
+ */
+export interface MapKPIReading extends PublicReadingKPI {
+  location_name?: string | null;
+  location_latitude?: number | null;
+  location_longitude?: number | null;
+  location_description?: string | null;
+}
+
+/** Public landing-page aggregate counts from GET /public/stats. */
+export interface PublicStats {
+  stations: number;
+  sensors: number;
+  total_sensors: number;
+  total_readings: number;
+  /**
+   * How many quantities each reading can carry — what the network collects,
+   * which is more than any one page displays. Derived from the backend schema.
+   * Optional so an older API that predates the field degrades to the fallback
+   * rather than rendering a bare 0.
+   */
+  parameters_tracked?: number;
+  /** Names of those quantities, in schema order. */
+  parameters?: string[];
 }
 
 export type DeviceApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -219,6 +270,84 @@ export interface RegisterResponse {
   user: User;
 }
 
+// ── Invite-only signup ───────────────────────────────────────────────────────
+
+/** How new accounts can be created right now; controlled by an admin. */
+export type SignupMode = 'open' | 'waitlist';
+
+export interface SignupConfig {
+  signup_mode: SignupMode;
+}
+
+/** Admin-facing settings: the mode plus the default link lifetime. */
+export interface SignupSettings {
+  signup_mode: SignupMode;
+  invite_expire_days: number;
+}
+
+export interface SignupSettingsUpdate {
+  signup_mode?: SignupMode;
+  invite_expire_days?: number;
+}
+
+export interface WaitlistPendingCount {
+  pending: number;
+}
+
+export interface WaitlistJoinRequest {
+  name: string;
+  email: string;
+  organization?: string;
+  reason?: string;
+}
+
+export interface WaitlistJoinResponse {
+  message: string;
+}
+
+export type WaitlistStatus = 'pending' | 'approved' | 'rejected';
+
+/** State of the most recent registration link issued for an entry. */
+export type InvitationStatus = 'active' | 'used' | 'expired' | 'revoked';
+
+export interface WaitlistEntry {
+  id: string;
+  name: string;
+  email: string;
+  organization?: string | null;
+  reason?: string | null;
+  status: WaitlistStatus;
+  reviewed_at?: string | null;
+  /** Non-null once the invitee has actually created their account. */
+  registered_user_id?: string | null;
+  invitation_expires_at?: string | null;
+  invitation_status?: InvitationStatus | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Returned once, at approval — the token is not recoverable afterwards. */
+export interface InvitationLink {
+  entry: WaitlistEntry;
+  registration_url: string;
+  token: string;
+  expires_at: string;
+}
+
+/** What the registration page learns from a link before showing its form. */
+export interface InvitationCheck {
+  email: string;
+  name?: string | null;
+  expires_at: string;
+}
+
+export interface InvitationRegisterRequest {
+  token: string;
+  name: string;
+  password: string;
+  password_confirm: string;
+}
+
 export interface CreateLocationRequest {
   name: string;
   latitude: number;
@@ -283,11 +412,12 @@ export interface CreateSensorReadingRequest {
   recorded_at: string;
 }
 
-export interface BulkSensorReadingRequest extends CreateSensorReadingRequest {}
+export interface BulkSensorReadingRequest extends CreateSensorReadingRequest { }
 
 export interface UpdateUserRequest {
   name?: string;
   email?: string;
+  preferences?: UserPreferences;
 }
 
 export interface UpdatePasswordRequest {
@@ -340,7 +470,7 @@ export interface SensorReadingsParams extends PaginationParams {
   serial_numbers?: string[];
   device_status?: 'active' | 'offline' | 'maintenance';
   device_statuses?: ('active' | 'offline' | 'maintenance')[];
-  
+
   // Time Filters
   start_date?: string; // ISO 8601 datetime
   end_date?: string; // ISO 8601 datetime
@@ -368,7 +498,7 @@ export interface SensorReadingsParams extends PaginationParams {
   voc_index_max?: number;
   nox_index_min?: number;
   nox_index_max?: number;
-  
+
   // Data Quality Filters
   has_pm2_5?: boolean;
   has_pm10?: boolean;
@@ -378,7 +508,7 @@ export interface SensorReadingsParams extends PaginationParams {
   has_nox_index?: boolean;
   has_all_readings?: boolean;
   min_readings_count?: number; // 0-6
-  
+
   // Pagination & Sorting
   offset?: number;
   page?: number;
@@ -387,12 +517,12 @@ export interface SensorReadingsParams extends PaginationParams {
   cursor?: string;
   order_by?: string; // recorded_at, pm2_5, temperature, etc.
   order?: 'asc' | 'desc';
-  
+
   // Response Enhancements
   include_stats?: boolean;
   include_device_info?: boolean;
   include_location_info?: boolean;
-  
+
   // Aggregation
   group_by?: 'device' | 'location' | 'hour' | 'day' | 'week' | 'month';
   aggregate?: 'avg' | 'min' | 'max' | 'count' | 'sum';
@@ -432,9 +562,16 @@ export interface SensorHealthStation {
   first_reading: string | null;
   last_reading: string | null;
   hours_since_last: number | null;
-  readings_24h: number;
-  expected_24h: number;
-  coverage_24h_pct: number;
+  /** Readings recorded inside the requested window (same count as total_readings). */
+  readings_window: number;
+  /**
+   * Readings expected inside the window at the once-per-minute cadence,
+   * clamped to when the device started reporting.
+   */
+  expected_window: number;
+  coverage_pct: number;
+  /** Instant the coverage expectation is measured from (ISO, local naive). */
+  coverage_since: string;
   bad_timestamp_count: number;
   pm25_eq_pm10_count: number;
   pm25_eq_pm10_pct: number;
@@ -453,18 +590,32 @@ export interface SensorHealthStation {
 export interface SensorHealthResponse {
   generated_at: string;
   timezone: string;
+  /** Length of the window (hours) used for reading counts / fill rates. */
+  window_hours: number;
+  /** Same window in days (fractional for sub-day windows, e.g. 6h → 0.25). */
   window_days: number;
+  /** Resolved window bounds (naive GMT+3), whether rolling or explicitly set. */
+  window_start?: string;
+  window_end?: string;
   summary: SensorHealthSummary;
   stations: SensorHealthStation[];
 }
 
 // Admin Operations and Infrastructure Monitoring Types
 export interface DatabaseConnectionPoolStats {
+  /** Base pool size — connections kept open between requests. */
   pool_size: number;
+  /** Extra connections the pool may open beyond pool_size under load. */
+  max_overflow?: number;
+  /** pool_size + max_overflow — what utilization is measured against. */
+  capacity?: number;
   checked_in: number;
   checked_out: number;
+  /** Overflow connections currently open (0 when the base pool suffices). */
   overflow: number;
+  /** Connections invalidated since start-up — a rising count means an unstable link. */
   invalid: number;
+  soft_invalid?: number;
   available: number;
   utilization_percent: number;
 }
@@ -512,6 +663,8 @@ export interface LogCleanupResults {
   password_reset_tokens: number;
   password_history: number;
   token_blacklist: number;
+  /** Request logs past the 7-day retention window. */
+  request_logs?: number;
   timestamp: string;
 }
 
@@ -525,6 +678,8 @@ export interface RequestLog {
   request_id: string;
   method: string;
   path: string;
+  /** Raw query string, without the leading "?" (null when there was none). */
+  query_string?: string | null;
   status_code: number;
   duration_ms: number | null;
   device_id: string | null;
@@ -533,6 +688,48 @@ export interface RequestLog {
   user_agent: string | null;
   error_detail: string | null;
   created_at: string;
+}
+
+/** The single-row shape: adds the fields too heavy for the list. */
+export interface RequestLogFull extends RequestLog {
+  /** As sent, credentials redacted. Kept for failed requests only. */
+  request_body?: string | null;
+  /** The exception behind a 5xx — never shown to the original caller. */
+  internal_error?: string | null;
+}
+
+export interface RequestLogLocationBrief {
+  id: string;
+  name: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  description?: string | null;
+}
+
+export interface RequestLogDeviceBrief {
+  id: string;
+  serial_number: string;
+  status?: string | null;
+  approval_status?: string | null;
+  installed_at?: string | null;
+  location?: RequestLogLocationBrief | null;
+}
+
+export interface RequestLogUserBrief {
+  id: string;
+  name?: string | null;
+  email: string;
+  role?: string | null;
+}
+
+export interface RequestLogDetail {
+  log: RequestLogFull;
+  device: RequestLogDeviceBrief | null;
+  user: RequestLogUserBrief | null;
+  /** Other requests sharing this correlation id. */
+  related: RequestLog[];
+  /** The same device's or user's recent requests — one-off or pattern? */
+  actor_history: RequestLog[];
 }
 
 export interface RequestLogsParams {

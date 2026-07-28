@@ -228,7 +228,7 @@ export function ChartTimelineScrubber({
 
         {/* Selected window */}
         <div
-          className="absolute top-1 bottom-1 rounded-md border-2 border-[#016FC4] bg-[#016FC4]/15 cursor-grab active:cursor-grabbing"
+          className="absolute top-1 bottom-1 rounded-md border-2 border-primary bg-primary/15 cursor-grab active:cursor-grabbing"
           style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, 0.5)}%` }}
           data-handle="window"
           onPointerDown={(e) => beginDrag("pan", e)}
@@ -236,13 +236,13 @@ export function ChartTimelineScrubber({
           {/* Left resize handle */}
           <div
             data-handle="left"
-            className="absolute left-0 top-0 bottom-0 w-3 -ml-1.5 cursor-ew-resize rounded-l-md bg-[#016FC4]/80 hover:bg-[#016FC4]"
+            className="absolute left-0 top-0 bottom-0 w-3 -ml-1.5 cursor-ew-resize rounded-l-md bg-primary/80 hover:bg-primary"
             onPointerDown={(e) => beginDrag("left", e)}
           />
           {/* Right resize handle */}
           <div
             data-handle="right"
-            className="absolute right-0 top-0 bottom-0 w-3 -mr-1.5 cursor-ew-resize rounded-r-md bg-[#016FC4]/80 hover:bg-[#016FC4]"
+            className="absolute right-0 top-0 bottom-0 w-3 -mr-1.5 cursor-ew-resize rounded-r-md bg-primary/80 hover:bg-primary"
             onPointerDown={(e) => beginDrag("right", e)}
           />
         </div>

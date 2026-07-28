@@ -1,0 +1,366 @@
+/*
+ * AuthAtmosphere — shared full-viewport environmental backdrop for the auth pages
+ * (login / forgot-password / reset-password).
+ *
+ * Light theme: serene daytime sky — soft vertical sky gradient with an emerald
+ * hint near the horizon, a breathing sun glow, drifting blurred clouds, sparse
+ * floating dust/pollen motes and a low haze band.
+ * Dark theme: night version — deep slate sky, cool moonlit glow, dimmed
+ * particles, subtler clouds.
+ *
+ * All motion is transform/opacity only (compositor-friendly); blurs are static.
+ * Fully disabled under prefers-reduced-motion.
+ */
+
+.auth-atmosphere {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Sky gradient ─────────────────────────────────────────────────────── */
+
+.auth-atmosphere__sky {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    #f8fbfd 0%,
+    #eef7fc 28%,
+    #e2f2fa 52%,
+    #e0f4f0 78%,
+    #dcf2e6 100%
+  );
+}
+
+.dark .auth-atmosphere__sky {
+  background: linear-gradient(
+    to bottom,
+    #020617 0%,
+    #050b1d 30%,
+    #081326 58%,
+    #071a24 82%,
+    #06201f 100%
+  );
+}
+
+/* ── Sun / moon glow (upper corner, slow breathing) ───────────────────── */
+
+.auth-atmosphere__sun {
+  position: absolute;
+  top: -28vmin;
+  right: -24vmin;
+  width: 90vmin;
+  height: 90vmin;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle,
+    rgba(254, 240, 178, 0.85) 0%,
+    rgba(253, 230, 160, 0.5) 18%,
+    rgba(252, 235, 180, 0.28) 34%,
+    rgba(224, 242, 254, 0.12) 55%,
+    transparent 72%
+  );
+  transform-origin: center;
+  animation: auth-sun-breathe 34s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+/* Warm secondary halo so the sunlight bleeds into the sky */
+.auth-atmosphere__sun::after {
+  content: "";
+  position: absolute;
+  inset: -18%;
+  border-radius: inherit;
+  background: radial-gradient(
+    circle,
+    rgba(255, 214, 130, 0.18) 0%,
+    transparent 62%
+  );
+}
+
+.dark .auth-atmosphere__sun {
+  background: radial-gradient(
+    circle,
+    rgba(226, 240, 254, 0.32) 0%,
+    rgba(191, 219, 254, 0.18) 16%,
+    rgba(148, 197, 233, 0.1) 34%,
+    rgba(96, 145, 190, 0.05) 52%,
+    transparent 70%
+  );
+  animation-duration: 40s;
+}
+
+.dark .auth-atmosphere__sun::after {
+  background: radial-gradient(
+    circle,
+    rgba(148, 190, 233, 0.08) 0%,
+    transparent 60%
+  );
+}
+
+/* ── Clouds (large blurred puffs, very slow drift) ────────────────────── */
+
+.auth-atmosphere__cloud {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(26px);
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.55) 55%,
+    transparent 100%
+  );
+  will-change: transform;
+}
+
+/* Extra puffs so the shape reads as a cloud, not a plain ellipse */
+.auth-atmosphere__cloud::before,
+.auth-atmosphere__cloud::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+  background: inherit;
+}
+
+.auth-atmosphere__cloud::before {
+  width: 62%;
+  height: 115%;
+  left: 6%;
+  top: -52%;
+}
+
+.auth-atmosphere__cloud::after {
+  width: 48%;
+  height: 95%;
+  right: 8%;
+  top: -34%;
+}
+
+.auth-atmosphere__cloud--one {
+  top: 12%;
+  left: -8%;
+  width: 44vw;
+  min-width: 320px;
+  height: 12vh;
+  min-height: 72px;
+  opacity: 0.85;
+  animation: auth-cloud-drift-a 96s ease-in-out infinite;
+}
+
+.auth-atmosphere__cloud--two {
+  top: 34%;
+  right: -10%;
+  width: 36vw;
+  min-width: 260px;
+  height: 10vh;
+  min-height: 60px;
+  opacity: 0.7;
+  animation: auth-cloud-drift-b 118s ease-in-out infinite;
+}
+
+.auth-atmosphere__cloud--three {
+  bottom: 24%;
+  left: 14%;
+  width: 28vw;
+  min-width: 200px;
+  height: 8vh;
+  min-height: 48px;
+  opacity: 0.5;
+  filter: blur(32px);
+  animation: auth-cloud-drift-c 74s ease-in-out infinite;
+}
+
+.dark .auth-atmosphere__cloud {
+  background: radial-gradient(
+    closest-side,
+    rgba(148, 163, 184, 0.16) 0%,
+    rgba(148, 163, 184, 0.08) 55%,
+    transparent 100%
+  );
+}
+
+.dark .auth-atmosphere__cloud--one {
+  opacity: 0.55;
+}
+
+.dark .auth-atmosphere__cloud--two {
+  opacity: 0.45;
+}
+
+.dark .auth-atmosphere__cloud--three {
+  opacity: 0.3;
+}
+
+/* ── Floating dust / pollen particles ─────────────────────────────────── */
+
+.auth-atmosphere__particle {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(
+    circle,
+    rgba(217, 190, 120, 0.9) 0%,
+    rgba(217, 190, 120, 0.35) 60%,
+    transparent 100%
+  );
+  filter: blur(1px);
+  opacity: 0;
+  animation: auth-particle-float var(--p-dur, 24s) ease-in-out
+    var(--p-delay, 0s) infinite;
+  will-change: transform, opacity;
+}
+
+.dark .auth-atmosphere__particle {
+  background: radial-gradient(
+    circle,
+    rgba(186, 230, 253, 0.8) 0%,
+    rgba(186, 230, 253, 0.3) 60%,
+    transparent 100%
+  );
+  opacity: 0;
+}
+
+/* ── Low haze band near the horizon ───────────────────────────────────── */
+
+.auth-atmosphere__haze {
+  position: absolute;
+  left: -5%;
+  right: -5%;
+  bottom: 0;
+  height: 24vh;
+  background: linear-gradient(
+    to top,
+    rgba(255, 255, 255, 0.75) 0%,
+    rgba(236, 250, 244, 0.4) 45%,
+    transparent 100%
+  );
+  filter: blur(14px);
+  animation: auth-haze-breathe 42s ease-in-out infinite;
+  will-change: opacity;
+}
+
+.dark .auth-atmosphere__haze {
+  background: linear-gradient(
+    to top,
+    rgba(30, 41, 59, 0.55) 0%,
+    rgba(30, 46, 58, 0.28) 45%,
+    transparent 100%
+  );
+}
+
+/* ── Keyframes ────────────────────────────────────────────────────────── */
+
+@keyframes auth-sun-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.07);
+    opacity: 1;
+  }
+}
+
+@keyframes auth-cloud-drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(9vw, 1.4vh, 0);
+  }
+}
+
+@keyframes auth-cloud-drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-8vw, 2vh, 0);
+  }
+}
+
+@keyframes auth-cloud-drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(6vw, -1.2vh, 0);
+  }
+}
+
+@keyframes auth-particle-float {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  12% {
+    opacity: var(--p-opacity, 0.5);
+  }
+  55% {
+    transform: translate3d(var(--p-dx, 12px), -26px, 0);
+    opacity: var(--p-opacity, 0.5);
+  }
+  88% {
+    opacity: calc(var(--p-opacity, 0.5) * 0.6);
+  }
+  100% {
+    transform: translate3d(calc(var(--p-dx, 12px) * 1.7), -48px, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes auth-haze-breathe {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ── Shared entrance animation for auth page content ──────────────────── */
+
+.auth-enter {
+  animation: auth-fade-up 0.8s ease-out both;
+}
+
+.auth-enter-delayed {
+  animation: auth-fade-up 0.8s ease-out 0.15s both;
+}
+
+@keyframes auth-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Reduced motion: no movement, keep a calm static scene ────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-atmosphere__sun,
+  .auth-atmosphere__cloud,
+  .auth-atmosphere__particle,
+  .auth-atmosphere__haze,
+  .auth-enter,
+  .auth-enter-delayed {
+    animation: none !important;
+  }
+
+  /* Particles stay visible as static motes instead of vanishing */
+  .auth-atmosphere__particle {
+    opacity: var(--p-opacity, 0.5);
+  }
+}

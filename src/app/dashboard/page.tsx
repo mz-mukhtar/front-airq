@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { useAuthStore } from "@/store/authStore";
 import { LoadingState } from "@/components/ui/loading-state";
 import { MapPageChrome } from "@/components/MapPageChrome";
+import { RequireAuth } from "@/components/RequireAuth";
 
 const Map = dynamic(() => import("@/components/Map").then((mod) => ({ default: mod.Map })), {
   ssr: false,
@@ -20,38 +18,18 @@ const Map = dynamic(() => import("@/components/Map").then((mod) => ({ default: m
 });
 
 export default function Dashboard() {
-  const { isAuthenticated, isLoading } = useAuthStore();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push("/login");
-    }
-  }, [isAuthenticated, isLoading, router]);
-
-  if (isLoading) {
-    return (
-      <LoadingState
-        fill
-        variant="overlay"
-        message="Loading dashboard"
-        hint="Verifying your session and preparing the map"
-        className="h-screen w-screen"
-      />
-    );
-  }
-
-  if (!isAuthenticated) {
-    return null;
-  }
-
   return (
-    <div className="relative h-screen w-screen overflow-hidden">
-      <div className="absolute inset-0 z-0">
-        <Map fullscreen />
-      </div>
+    <RequireAuth
+      message="Loading dashboard"
+      hint="Verifying your session and preparing the map"
+    >
+      <div className="relative h-screen w-screen overflow-hidden">
+        <div className="absolute inset-0 z-0">
+          <Map fullscreen />
+        </div>
 
-      <MapPageChrome />
-    </div>
+        <MapPageChrome />
+      </div>
+    </RequireAuth>
   );
 }

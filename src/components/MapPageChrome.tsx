@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,15 +18,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProfileButton } from "@/components/ProfileButton";
+import { AqiStandardSelector } from "@/components/map/AqiStandardSelector";
+import { useAqiStandard } from "@/lib/preferences";
 import { useAuth } from "@/contexts/AuthContext";
 import { useStationNavItems } from "@/hooks/useStationNavItems";
+import { useWaitlistNotifications } from "@/hooks/useWaitlistNotifications";
 import {
   Database,
   Menu,
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { APP_NAV_ITEMS, ADMIN_NAV_ITEM, isActiveNavPath } from "@/lib/app-nav";
+import {
+  APP_NAV_ITEMS,
+  ADMIN_NAV_ITEM,
+  DIAGNOSTICS_NAV_ITEM,
+  isActiveNavPath,
+} from "@/lib/app-nav";
 
 const navItems = APP_NAV_ITEMS.filter((item) => item.path !== "/sensors");
 
@@ -36,15 +45,29 @@ function isActivePath(pathname: string, path: string) {
   return isActiveNavPath(pathname, path);
 }
 
+/** Cap the badge so a long queue cannot widen the floating rail. */
+function badgeText(count: number) {
+  return count > 99 ? "99+" : String(count);
+}
+
+function badgeLabel(count: number) {
+  return count === 1
+    ? "1 access request awaiting review"
+    : `${count} access requests awaiting review`;
+}
+
 export function MapPageChrome() {
   const router = useRouter();
   const pathname = usePathname();
   const { user } = useAuth();
   const { stations, stationsLoading } = useStationNavItems();
+  const { pending: pendingRequests } = useWaitlistNotifications();
+  const standard = useAqiStandard();
 
   const items = [...navItems];
   if (user?.role === "admin") {
     items.push(ADMIN_NAV_ITEM);
+    items.push(DIAGNOSTICS_NAV_ITEM);
   }
 
   const sensorsActive =
@@ -78,26 +101,36 @@ export function MapPageChrome() {
 
   return (
     <>
-      {/* Top-left branding */}
-      <div className="pointer-events-auto absolute top-4 left-4 md:left-20 z-[1000] max-w-[min(100vw-2rem,22rem)]">
-        <div className="rounded-2xl border border-white/20 bg-background/85 backdrop-blur-md shadow-lg px-4 py-3">
-          <div className="flex items-center gap-3">
+      {/* Top-left branding, with the index picker stacked under it */}
+      <div className="pointer-events-auto absolute top-4 left-4 md:left-20 z-[1000] flex max-w-[min(100vw-2rem,22rem)] flex-col items-start gap-2">
+        <div className="w-full rounded-2xl border border-white/20 bg-background/85 backdrop-blur-md shadow-lg px-4 py-3">
+          {/* Monogram + wordmark go home, as a header brand mark should. */}
+          <Link
+            href="/"
+            aria-label="Addis Air Net — home"
+            className="flex items-center gap-3 rounded-xl transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <div className="h-10 w-10 shrink-0 rounded-xl bg-ring text-background flex items-center justify-center text-xs font-semibold tracking-tight">
-              AQ
+              AAN
             </div>
             <div className="min-w-0">
               <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                 Dashboard
               </p>
-              <p className="text-sm font-semibold text-primary truncate">
-                Addis Ababa air quality map
-              </p>
+              <p className="text-sm font-semibold text-primary truncate">Addis Air Net</p>
             </div>
-          </div>
+          </Link>
           <p className="mt-2 text-[11px] text-muted-foreground hidden sm:block">
-            Real-time PM and AQI · click a station for details
+            Addis Ababa · real-time PM and AQI · click a station for details
           </p>
         </div>
+
+        {/*
+          Which index the map reports against. Lives here rather than inside
+          <Map> so it flows under the branding card instead of overlapping it,
+          and so it stays available while the map is still loading.
+        */}
+        <AqiStandardSelector standard={standard} />
       </div>
 
       {/* Top-right profile */}
@@ -111,21 +144,30 @@ export function MapPageChrome() {
       <nav className="pointer-events-auto absolute left-4 top-1/2 -translate-y-1/2 z-[1000] hidden md:flex flex-col gap-2">
         {items.map(({ icon: Icon, label, path }) => {
           const active = isActivePath(pathname, path);
+          const badge = path === ADMIN_NAV_ITEM.path ? pendingRequests : 0;
           return (
             <Button
               key={path}
               variant="ghost"
               size="icon"
-              title={label}
+              title={badge > 0 ? `${label} — ${badgeLabel(badge)}` : label}
               onClick={() => router.push(path)}
               className={cn(
-                "h-11 w-11 rounded-xl border border-white/20 bg-background/85 backdrop-blur-md shadow-lg",
+                "relative h-11 w-11 rounded-xl border border-white/20 bg-background/85 backdrop-blur-md shadow-lg",
                 active
                   ? "bg-accent text-accent-foreground hover:bg-accent"
                   : "text-primary hover:bg-background/95"
               )}
             >
               <Icon className="h-5 w-5" />
+              {badge > 0 && (
+                <>
+                  <span className="absolute -right-1 -top-1 flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-background">
+                    {badgeText(badge)}
+                  </span>
+                  <span className="sr-only">{badgeLabel(badge)}</span>
+                </>
+              )}
             </Button>
           );
         })}
@@ -173,6 +215,7 @@ export function MapPageChrome() {
             <nav className="mt-6 space-y-2">
               {items.map(({ icon: Icon, label, path }) => {
                 const active = isActivePath(pathname, path);
+                const badge = path === ADMIN_NAV_ITEM.path ? pendingRequests : 0;
                 return (
                   <Button
                     key={path}
@@ -182,6 +225,12 @@ export function MapPageChrome() {
                   >
                     <Icon className="h-5 w-5" />
                     {label}
+                    {badge > 0 && (
+                      <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 text-[11px] font-bold leading-none text-white">
+                        {badgeText(badge)}
+                        <span className="sr-only"> {badgeLabel(badge)}</span>
+                      </span>
+                    )}
                   </Button>
                 );
               })}

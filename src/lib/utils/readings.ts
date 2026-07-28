@@ -1,4 +1,4 @@
-import { SensorReading, Location, PublicReadingKPI } from '@/lib/api/types';
+import { SensorReading, Location, PublicReadingKPI, MapKPIReading } from '@/lib/api/types';
 import { dedupeAsync } from '@/lib/api/dedupe';
 
 export interface JoinedKPIReading extends PublicReadingKPI {
@@ -8,20 +8,53 @@ export interface JoinedKPIReading extends PublicReadingKPI {
   location_description?: string | null;
 }
 
-/** Station shape shared by Map and landing station cards */
+/**
+ * Station shape shared by Map and landing station cards.
+ *
+ * Metric fields are nullable: a sensor that did not report a metric must render
+ * as "—", never as a fabricated 0 (or a made-up 22°C / 60% default).
+ *
+ * Deliberately carries no `aqi` / `airQualityLevel`: the index value and its
+ * category depend on which standard the reader selected, so they are derived at
+ * render time via `evaluateAqi` rather than baked in here. See
+ * `@/lib/utils/aqi-standards`.
+ */
 export interface MapStation {
   id: string;
   name: string;
   position: [number, number];
-  aqi: number;
-  status: string;
-  airQualityLevel: string;
-  pm2_5: number;
-  pm10_0: number;
-  humidity: number;
-  temperature: number;
+  pm1_0: number | null;
+  pm2_5: number | null;
+  pm10_0: number | null;
+  humidity: number | null;
+  temperature: number | null;
   locationId: string;
   deviceId: string;
+  /** ISO timestamp of the latest reading (drives the freshness dot); null for clusters. */
+  lastSeenAt: string | null;
+}
+
+/** Coerce an API value to a finite number, or null when it is missing/unusable. */
+export function toFiniteOrNull(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Mean of the values that actually exist. Missing entries are skipped rather
+ * than counted as 0 — averaging `[12, null]` as `6` understates the result.
+ * Returns null when nothing in the set was measured.
+ */
+export function averageDefined(values: Array<number | null | undefined>): number | null {
+  let sum = 0;
+  let count = 0;
+  for (const value of values) {
+    if (value === null || value === undefined || !Number.isFinite(value)) continue;
+    sum += value;
+    count += 1;
+  }
+  return count > 0 ? sum / count : null;
 }
 
 /** Build deduplicated map/card stations from joined KPI + location rows */
@@ -36,46 +69,76 @@ export function buildMapStationsFromJoined(joined: JoinedKPIReading[]): MapStati
       return true;
     })
     .map((item) => {
-      const pm25 = item.pm2_5 ?? 0;
-      const pm10 = item.pm10 ?? 0;
-      const temperature = item.temperature ?? 22;
-      const humidity = item.humidity ?? 60;
-      const aqi = calculateAQI(pm25, pm10);
-      const airQualityLevel = normalizeAirQualityLevel(
-        item.air_quality_level ?? getAQIStatus(aqi)
-      );
-
+      // No defaults here — a missing metric stays missing all the way to the UI.
       return {
         id: `${item.location_id}-${item.device_id}`,
         name: item.location_name,
         position: [item.location_latitude, item.location_longitude] as [number, number],
-        aqi,
-        status: airQualityLevel,
-        airQualityLevel,
-        pm2_5: pm25,
-        pm10_0: pm10,
-        humidity,
-        temperature,
+        pm1_0: toFiniteOrNull(item.pm1_0),
+        pm2_5: toFiniteOrNull(item.pm2_5),
+        pm10_0: toFiniteOrNull(item.pm10),
+        humidity: toFiniteOrNull(item.humidity),
+        temperature: toFiniteOrNull(item.temperature),
         locationId: item.location_id!,
         deviceId: item.device_id,
+        lastSeenAt: item.recorded_at ?? null,
       };
     });
 }
 
-/** Fetch locations + latest KPIs once, with join applied (deduped) */
+/** Build joined rows from the embedded map KPI (drops devices with no location). */
+export function embeddedKpisToJoined(kpis: MapKPIReading[]): JoinedKPIReading[] {
+  return kpis
+    .filter(
+      (kpi) =>
+        kpi.location_id != null &&
+        kpi.location_latitude != null &&
+        kpi.location_longitude != null
+    )
+    .map((kpi) => ({
+      ...kpi,
+      location_name: kpi.location_name ?? "Unknown location",
+      location_latitude: kpi.location_latitude as number,
+      location_longitude: kpi.location_longitude as number,
+      location_description: kpi.location_description ?? null,
+    }));
+}
+
+/** Reconstruct deduplicated Location rows from embedded map KPI. */
+function locationsFromJoined(joined: JoinedKPIReading[]): Location[] {
+  const byId = new Map<string, Location>();
+  for (const j of joined) {
+    if (j.location_id && !byId.has(j.location_id)) {
+      byId.set(j.location_id, {
+        id: j.location_id,
+        name: j.location_name,
+        latitude: j.location_latitude,
+        longitude: j.location_longitude,
+        description: j.location_description ?? null,
+      } as Location);
+    }
+  }
+  return Array.from(byId.values());
+}
+
+/**
+ * Fetch the public map data in a single request (GET /sensor-readings/kpi-map,
+ * which embeds location). Returns the same shape as before — `locations` and
+ * `joined` are reconstructed from the embedded KPI so callers are unchanged.
+ */
 export async function fetchPublicDashboardData(): Promise<{
   locations: Location[];
-  kpis: PublicReadingKPI[];
+  kpis: MapKPIReading[];
   joined: JoinedKPIReading[];
   stations: MapStation[];
 }> {
   return dedupeAsync("public-dashboard-data", async () => {
-    const { getLocations } = await import("@/lib/api/locations");
-    const { getLatestKPIs } = await import("@/lib/api/sensor-readings");
+    const { getPublicMapKPIs } = await import("@/lib/api/sensor-readings");
 
-    const [locations, kpis] = await Promise.all([getLocations(), getLatestKPIs()]);
-    const joined = joinKPIsWithLocations(kpis, locations);
+    const kpis = await getPublicMapKPIs();
+    const joined = embeddedKpisToJoined(kpis);
     const stations = buildMapStationsFromJoined(joined);
+    const locations = locationsFromJoined(joined);
 
     return { locations, kpis, joined, stations };
   });
@@ -165,15 +228,21 @@ export function getAirQualityLevelColor(level: string | null | undefined): strin
   }
 }
 
-// Extract value from reading_value with multiple possible keys
-// Handles both flat structure (reading.pm2_5) and nested structure (reading.reading_value.pm2_5)
-// Missing values collapse to 0 — use extractReadingValueOrNull where "no data" matters.
+/**
+ * Extract value from reading_value with multiple possible keys, collapsing a
+ * missing value to 0.
+ *
+ * @deprecated No display path should use this: a sensor that reported nothing is
+ * not reading 0, and charting it as 0 drags lines and averages toward zero. Use
+ * {@link extractReadingValueOrNull} and render null as "—" / a chart gap.
+ */
 export function extractReadingValue(reading: SensorReading | any, keys: string[]): number {
   return extractReadingValueOrNull(reading, keys) ?? 0;
 }
 
-// Like extractReadingValue, but returns null when the value is genuinely missing
-// so "no data" isn't conflated with a measured zero (table/CSV paths).
+// Handles both flat structure (reading.pm2_5) and nested structure
+// (reading.reading_value.pm2_5). Returns null when the value is genuinely
+// missing so "no data" isn't conflated with a measured zero.
 export function extractReadingValueOrNull(reading: SensorReading | any, keys: string[]): number | null {
   // First try flat structure (for /latest endpoint responses)
   for (const key of keys) {
@@ -291,8 +360,10 @@ function aqiSubIndex(
 // Dashboard "AQI": interim product decision — display the raw PM2.5
 // concentration (µg/m³) as the AQI value. Switch to calculateEpaAqi below
 // when the real index calculation is adopted.
-export function calculateAQI(pm25: number, _pm10: number): number {
-  if (!Number.isFinite(pm25)) return 0;
+// Returns null when PM2.5 was not measured — an unreported sensor is not "0 AQI".
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function calculateAQI(pm25: number | null | undefined, _pm10?: number | null): number | null {
+  if (pm25 === null || pm25 === undefined || !Number.isFinite(pm25)) return null;
   return Math.round(Math.max(0, pm25));
 }
 
@@ -325,7 +396,8 @@ export function getAQIStatus(
 // Ranges: Good 0–15, Moderate 15–35, Unhealthy (Sensitive) 35–55, Unhealthy 55+
 export type PM25Level = "Good" | "Moderate" | "Unhealthy (Sensitive)" | "Unhealthy";
 
-export function getPM25Level(pm25: number): PM25Level {
+export function getPM25Level(pm25: number | null | undefined): PM25Level | null {
+  if (pm25 === null || pm25 === undefined || !Number.isFinite(pm25)) return null;
   if (pm25 <= 15) return "Good";
   if (pm25 <= 35) return "Moderate";
   if (pm25 <= 55) return "Unhealthy (Sensitive)";
@@ -333,11 +405,32 @@ export function getPM25Level(pm25: number): PM25Level {
 }
 
 /** Returns hex color for map dots and indicators per PM2.5 (µg/m³): Green / Yellow / Orange / Red */
-export function getPM25Color(pm25: number): string {
-  if (pm25 <= 15) return "#22c55e"; // Light green – Good
-  if (pm25 <= 35) return "#eab308"; // Golden yellow – Moderate
-  if (pm25 <= 55) return "#f97316"; // Orange – Unhealthy (Sensitive)
-  return "#dc2626";                // Deep red – Unhealthy
+export function getPM25Color(pm25: number | null | undefined): string {
+  switch (getPM25Level(pm25)) {
+    case "Good":
+      return "#22c55e"; // Light green – Good
+    case "Moderate":
+      return "#eab308"; // Golden yellow – Moderate
+    case "Unhealthy (Sensitive)":
+      return "#f97316"; // Orange – Unhealthy (Sensitive)
+    case "Unhealthy":
+      return "#dc2626"; // Deep red – Unhealthy
+    default:
+      return "#6b7280"; // Gray – no measurement
+  }
+}
+
+/**
+ * Render a metric for display, or an em dash when it was never measured.
+ * The single place the "missing ≠ 0" rule turns into pixels.
+ */
+export function formatMetricValue(
+  value: number | null | undefined,
+  digits = 1,
+  fallback = "—"
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return fallback;
+  return value.toFixed(digits);
 }
 
 // Process readings into time series data
@@ -345,9 +438,9 @@ export function processReadingsToTimeSeries(
   readings: SensorReading[] | any[],
   valueKey: string,
   keys: string[]
-): Array<{ time: string; value: number }> {
+): Array<{ time: string; value: number | null }> {
   return readings.map(reading => {
-    const value = extractReadingValue(reading, keys);
+    const value = extractReadingValueOrNull(reading, keys);
     const timestamp = extractTimestamp(reading);
     const date = new Date(timestamp);
     return {
