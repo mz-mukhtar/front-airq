@@ -52,8 +52,8 @@ export function UserManagement() {
       setError(null);
       const data = await usersAPI.getUsers();
       setUsers(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to load users");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to load users");
     } finally {
       setLoading(false);
     }
@@ -86,8 +86,8 @@ export function UserManagement() {
       if (user?.id === userId) {
         await logout();
       }
-    } catch (err: any) {
-      alert(err.message || "Failed to delete user");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to delete user");
     }
   };
 
@@ -126,8 +126,8 @@ export function UserManagement() {
       if (editingUser && user?.id === editingUser.id) {
         await refreshUser();
       }
-    } catch (err: any) {
-      alert(err.message || "Failed to save user");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to save user");
     }
   };
 
@@ -141,8 +141,8 @@ export function UserManagement() {
       setPasswordUserId(null);
       setNewPassword("");
       alert("Password reset successfully");
-    } catch (err: any) {
-      alert(err.message || "Failed to reset password");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to reset password");
     }
   };
 

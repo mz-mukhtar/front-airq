@@ -2,13 +2,10 @@
 
 import { ReactNode, useEffect, useMemo, useRef } from "react";
 import {
-  Area,
   AreaChart,
-  Bar,
   BarChart,
   CartesianGrid,
   Legend,
-  Line,
   LineChart,
   ResponsiveContainer,
   Tooltip,
@@ -92,7 +89,9 @@ export function ZoomableTimeSeriesChart({
   // Latest zoom domain readable from the rAF callback without re-binding the
   // wheel listener on every zoom step.
   const zoomDomainRef = useRef<ZoomDomain>(zoomDomain ?? null);
-  zoomDomainRef.current = zoomDomain ?? null;
+  useEffect(() => {
+    zoomDomainRef.current = zoomDomain ?? null;
+  }, [zoomDomain]);
 
   // The zoom/pan coordinate system: the caller-supplied window when there is
   // one (widened to cover any bucket that falls outside it), else the data.

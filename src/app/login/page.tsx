@@ -126,14 +126,16 @@ function LoginPageContent() {
           setError("Invalid email or password.");
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Extract error message from ApiException or other errors
       let errorMessage = "An error occurred. Please try again.";
 
       // Check if it's an ApiException with validation errors
-      if (err?.errors && Array.isArray(err.errors) && err.errors.length > 0) {
+      const apiErr = err as { errors?: unknown[], detail?: string, message?: string, originalError?: unknown };
+      if (apiErr?.errors && Array.isArray(apiErr.errors) && apiErr.errors.length > 0) {
         // Format validation errors for display
-        const errorMessages = err.errors.map((validationErr: any) => {
+        const errorMessages = apiErr.errors.map((vErr: unknown) => {
+          const validationErr = vErr as { loc?: string[], msg?: string, message?: string };
           // Extract field name from location (e.g., ["body", "password"] -> "password")
           const field = validationErr.loc && validationErr.loc.length > 0
             ? String(validationErr.loc[validationErr.loc.length - 1]).replace(/_/g, ' ')
@@ -144,18 +146,18 @@ function LoginPageContent() {
         });
         errorMessage = errorMessages.join('\n');
       } else if (err instanceof Error) {
-        errorMessage = err.message;
-      } else if (err?.detail) {
-        errorMessage = err.detail;
-      } else if (err?.message) {
-        errorMessage = err.message;
+        errorMessage = (err as Error).message;
+      } else if (apiErr?.detail) {
+        errorMessage = apiErr.detail;
+      } else if (apiErr?.message) {
+        errorMessage = apiErr.message;
       } else if (typeof err === 'string') {
         errorMessage = err;
       }
 
       console.error("Login/Signup error:", errorMessage);
-      if (err?.originalError) {
-        console.error("Original error:", err.originalError);
+      if (apiErr?.originalError) {
+        console.error("Original error:", apiErr.originalError);
       }
 
       setError(errorMessage);

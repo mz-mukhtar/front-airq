@@ -1,16 +1,12 @@
 import { apiRequest, apiFormRequest } from './client';
 import {
   User,
-  LoginRequest,
   LoginResponse,
   RefreshTokenResponse,
   LogoutResponse,
   RegisterRequest,
   RegisterResponse,
   UpdateUserRequest,
-  UpdatePasswordRequest,
-  CreateAdminRequest,
-  UpdateRoleRequest,
 } from './types';
 
 // Register a new user

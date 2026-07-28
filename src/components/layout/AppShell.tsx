@@ -32,6 +32,7 @@ export function AppShell({
   useEffect(() => {
     const saved = localStorage.getItem("sidebarOpen");
     if (saved !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSidebarOpen(saved === "true");
     }
   }, []);

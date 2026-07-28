@@ -1,9 +1,8 @@
-import { apiRequest, apiFormRequest } from './client';
+import { apiRequest } from './client';
 import {
   User,
   UserAdminCreate,
   UserAdminUpdate,
-  ResetPasswordRequest,
 } from './types';
 
 // Get all users (Admin only)

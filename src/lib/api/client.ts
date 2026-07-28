@@ -5,8 +5,8 @@ export interface ValidationError {
   type: string;
   loc: (string | number)[];
   msg: string;
-  input?: any;
-  ctx?: Record<string, any>;
+  input?: unknown;
+  ctx?: Record<string, unknown>;
 }
 
 // Full error response structure
@@ -31,7 +31,7 @@ export class ApiException extends Error {
   constructor(
     public status: number,
     public detail: string,
-    public originalError?: any,
+    public originalError?: unknown,
     public errors?: ValidationError[]
   ) {
     super(detail);
@@ -457,9 +457,9 @@ function extractFilenameFromContentDisposition(header: string | null): string | 
 
 async function apiBlobRequest(
   endpoint: string,
-  options: RequestInit & { requireAuth?: boolean; _retryCount?: number; _refreshAttempted?: boolean } = {}
+  options: RequestInit & { requireAuth?: boolean; _refreshAttempted?: boolean } = {}
 ): Promise<DownloadedFile> {
-  const { requireAuth = true, _retryCount = 0, _refreshAttempted = false, ...fetchOptions } = options;
+  const { requireAuth = true, _refreshAttempted = false, ...fetchOptions } = options;
 
   const headers: Record<string, string> = {
     ...(fetchOptions.headers as Record<string, string> || {}),

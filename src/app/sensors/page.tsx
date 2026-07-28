@@ -246,15 +246,7 @@ function SensorsContent() {
     "#a855f7", // Violet
   ];
 
-  const readingsForStation = (station: StationData): SensorReading[] => {
-    if (viewMode === "table") {
-      const table = tableReadingsByDevice[station.deviceId];
-      if (table && table.length > 0) return table;
-    }
-    const graph = graphReadingsByDevice[station.deviceId];
-    if (graph && graph.length > 0) return graph;
-    return station.readings;
-  };
+
 
   const activeDeviceIds = useMemo(
     () => selectedStationIds.filter((id) => availableDevices.some((item) => item.device.id === id)),
@@ -403,7 +395,7 @@ function SensorsContent() {
         if (requestId !== seriesRequestIdRef.current) return;
         console.error("Error fetching sensor readings:", err);
         if (blocking) {
-          setError(err instanceof Error ? err.message : "Failed to load sensor readings");
+          setError(err instanceof Error ? (err as Error).message : "Failed to load sensor readings");
         }
       } finally {
         // Only the latest request settles the loading flags; a stale request
@@ -471,9 +463,9 @@ function SensorsContent() {
         } else if (devicesList.length > 0) {
           setSelectedStationIds((prev) => (prev.length > 0 ? prev : [devicesList[0].device.id]));
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Error fetching metadata:", err);
-        setError(err?.message || "Failed to load device information");
+        setError((err as Error)?.message || "Failed to load device information");
       }
     };
 
@@ -552,7 +544,7 @@ function SensorsContent() {
         : stations.length > 0
           ? [stations[0]]
           : [], // Fallback to first station if none selected
-    [selectedStationIds, stations]
+        [selectedStationIds, stations]
   );
 
   // Charts always render graph (series bucket) data — table readings are for the
@@ -571,6 +563,7 @@ function SensorsContent() {
     if (csvDialogOpen && displayStations.length > 0) {
       setSelectedStationsForExport(new Set(displayStations.map(s => s.id)));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [csvDialogOpen, displayStations.length]);
 
   // Generate merged PM data - combine PM2.5 and PM10 for all stations, grouped by time.
@@ -1139,7 +1132,7 @@ function SensorsContent() {
 
       setCsvDialogOpen(false);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Export failed";
+      const message = err instanceof Error ? (err as Error).message : "Export failed";
       alert(message);
     } finally {
       setCsvExportLoading(false);
@@ -1193,7 +1186,7 @@ function SensorsContent() {
   };
 
   // Custom tooltip formatter to round values
-  const formatTooltipValue = (value: any) => {
+  const formatTooltipValue = (value: unknown) => {
     if (typeof value === 'number') {
       return Math.round(value * 100) / 100; // Round to 2 decimal places
     }
@@ -1201,21 +1194,21 @@ function SensorsContent() {
   };
 
   // Custom tooltip component that shows all stations at the hovered time
-  const CustomTooltip = ({ active, payload, label, data }: any) => {
+  const CustomTooltip = ({ active, payload, label, data }: { active?: boolean, payload?: { dataKey: string; name?: string; value?: unknown; color?: string; payload?: Record<string, unknown> }[], label?: unknown, data?: Record<string, unknown>[] }) => {
     if (active && payload && payload.length) {
       // Get the time from the label or payload
       const timeValue = label ?? payload[0]?.payload?.ts ?? payload[0]?.payload?.time;
 
       // Collect all entries from payload (these are the data series that have values at this point)
-      const allEntries = new Map<string, { name: string; value: any; color: string }>();
+      const allEntries = new Map<string, { name: string; value: unknown; color: string }>();
 
       // Add all entries from the payload (Recharts with shared=true will include all series)
-      payload.forEach((entry: any) => {
+      payload.forEach((entry) => {
         if (entry.dataKey && entry.value !== undefined && entry.value !== null) {
           allEntries.set(entry.dataKey, {
             name: entry.name || entry.dataKey,
             value: entry.value,
-            color: entry.color,
+            color: entry.color || "#000000",
           });
         }
       });
@@ -1224,13 +1217,13 @@ function SensorsContent() {
       // find all data points at this time and aggregate
       if (data && Array.isArray(data) && displayStations.length > 1) {
         // Find all data points at this exact time
-        const dataPointsAtTime = data.filter((d: any) => (d.ts ?? d.time) === timeValue);
+        const dataPointsAtTime = (data as Record<string, unknown>[]).filter((d) => (d.ts ?? d.time) === timeValue);
 
         // For each station, find its value at this time
         displayStations.forEach((station) => {
           // Check if this station's data is already in the payload
           const stationKey = station.name;
-          const hasInPayload = payload.some((p: any) => p.dataKey === stationKey);
+          const hasInPayload = payload.some((p) => p.dataKey === stationKey);
 
           if (!hasInPayload) {
             // Look for this station's value in data points at this time
@@ -1252,10 +1245,7 @@ function SensorsContent() {
       }
 
       // Get time label
-      const dataPoint = payload[0]?.payload;
-      let timeLabel: string;
-
-      timeLabel = formatTooltipTime(timeValue);
+      const timeLabel = formatTooltipTime(timeValue);
 
       // Sort entries by station name for consistent display
       const sortedEntries = Array.from(allEntries.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -1270,8 +1260,8 @@ function SensorsContent() {
               </p>
             ))
           ) : (
-            payload.map((entry: any, index: number) => (
-              <p key={index} style={{ color: entry.color }} className="text-sm">
+            payload.map((entry, index: number) => (
+              <p key={index} style={{ color: entry.color as string }} className="text-sm">
                 {`${entry.name}: ${formatTooltipValue(entry.value)}`}
               </p>
             ))

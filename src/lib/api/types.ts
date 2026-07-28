@@ -117,7 +117,7 @@ export interface SensorDevice {
   approved_by?: string | null;
   installed_at: string;
   created_at: string;
-  metadata_json?: Record<string, any>;
+  metadata_json?: Record<string, unknown>;
 }
 
 /** Response from POST /sensor-devices/ — includes the one-time plaintext API key. */
@@ -145,7 +145,7 @@ export interface SensorReading {
   nox_index?: number;
   recorded_at: string;
   created_at: string;
-  reading_value?: Record<string, any>; // Legacy support (still read defensively in lib/utils/readings.ts)
+  reading_value?: Record<string, unknown>; // Legacy support (still read defensively in lib/utils/readings.ts)
   device?: SensorDevice; // When include_device_info=true
   location?: Location; // When include_location_info=true
 }
@@ -381,7 +381,7 @@ export interface CreateSensorDeviceRequest {
   who_deployed_it: 'source' | 'custom';
   serial_number: string;
   status?: 'active' | 'offline' | 'maintenance';
-  metadata_json?: Record<string, any>;
+  metadata_json?: Record<string, unknown>;
 }
 
 export interface UpdateSensorDeviceRequest {
@@ -389,7 +389,7 @@ export interface UpdateSensorDeviceRequest {
   who_deployed_it?: 'source' | 'custom';
   serial_number?: string;
   status?: 'active' | 'offline' | 'maintenance';
-  metadata_json?: Record<string, any>;
+  metadata_json?: Record<string, unknown>;
 }
 
 export interface CreateSensorReadingRequest {
@@ -412,7 +412,7 @@ export interface CreateSensorReadingRequest {
   recorded_at: string;
 }
 
-export interface BulkSensorReadingRequest extends CreateSensorReadingRequest { }
+export type BulkSensorReadingRequest = CreateSensorReadingRequest;
 
 export interface UpdateUserRequest {
   name?: string;

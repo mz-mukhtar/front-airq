@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ArrowLeft, Mail, User, Calendar } from "lucide-react";
 import { updateCurrentUser, updatePassword } from "@/lib/api/auth";
-import { User as UserType } from "@/lib/api/types";
+
 
 export default function ProfilePage() {
   return (
@@ -74,8 +74,8 @@ function ProfileContent() {
       await updateCurrentUser({ name, email });
       await refreshUser();
       setSuccess("Profile updated successfully");
-    } catch (err: any) {
-      setError(err?.message || "Failed to update profile");
+    } catch (err: unknown) {
+      setError((err as Error)?.message || "Failed to update profile");
     } finally {
       setIsLoading(false);
     }
@@ -104,8 +104,8 @@ function ProfileContent() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-    } catch (err: any) {
-      setError(err?.message || "Failed to update password");
+    } catch (err: unknown) {
+      setError((err as Error)?.message || "Failed to update password");
     } finally {
       setIsLoading(false);
     }

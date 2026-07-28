@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -188,9 +188,14 @@ function SidebarNav({
     pathname.startsWith("/stations/");
   const [sensorsOpen, setSensorsOpen] = useState(sensorsActive);
 
-  useEffect(() => {
-    if (sensorsActive) setSensorsOpen(true);
-  }, [sensorsActive]);
+  const [prevSensorsActive, setPrevSensorsActive] = useState(sensorsActive);
+
+  if (sensorsActive !== prevSensorsActive) {
+    setPrevSensorsActive(sensorsActive);
+    if (sensorsActive) {
+      setSensorsOpen(true);
+    }
+  }
 
   const coreItems = menuItems.filter((i) => i.path !== "/sensors");
   const sensorsItem = menuItems.find((i) => i.path === "/sensors");

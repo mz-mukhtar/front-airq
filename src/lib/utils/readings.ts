@@ -236,17 +236,17 @@ export function getAirQualityLevelColor(level: string | null | undefined): strin
  * not reading 0, and charting it as 0 drags lines and averages toward zero. Use
  * {@link extractReadingValueOrNull} and render null as "—" / a chart gap.
  */
-export function extractReadingValue(reading: SensorReading | any, keys: string[]): number {
+export function extractReadingValue(reading: SensorReading | Record<string, unknown>, keys: string[]): number {
   return extractReadingValueOrNull(reading, keys) ?? 0;
 }
 
 // Handles both flat structure (reading.pm2_5) and nested structure
 // (reading.reading_value.pm2_5). Returns null when the value is genuinely
 // missing so "no data" isn't conflated with a measured zero.
-export function extractReadingValueOrNull(reading: SensorReading | any, keys: string[]): number | null {
+export function extractReadingValueOrNull(reading: SensorReading | Record<string, unknown>, keys: string[]): number | null {
   // First try flat structure (for /latest endpoint responses)
   for (const key of keys) {
-    const flatValue = (reading as any)[key];
+    const flatValue = (reading as Record<string, unknown>)[key];
     if (flatValue !== undefined && flatValue !== null) {
       if (typeof flatValue === 'number') return flatValue;
       if (typeof flatValue === 'string') {
@@ -259,7 +259,7 @@ export function extractReadingValueOrNull(reading: SensorReading | any, keys: st
   // Then try nested structure (for standard sensor readings)
   if (reading.reading_value && typeof reading.reading_value === 'object') {
     for (const key of keys) {
-      const value = reading.reading_value[key];
+      const value = (reading.reading_value as Record<string, unknown>)[key];
       if (value !== undefined && value !== null) {
         if (typeof value === 'number') return value;
         if (typeof value === 'string') {
@@ -275,10 +275,10 @@ export function extractReadingValueOrNull(reading: SensorReading | any, keys: st
 
 // Extract timestamp from reading (prioritizes recorded_at, then timestamp_ms, falls back to created_at)
 // Handles both flat structure and nested structure
-export function extractTimestamp(reading: SensorReading | any): number {
+export function extractTimestamp(reading: SensorReading | Record<string, unknown>): number {
   // Prioritize recorded_at (flat structure) - this is the actual measurement time
-  if ((reading as any).recorded_at) {
-    const recordedAt = (reading as any).recorded_at;
+  if ((reading as Record<string, unknown>).recorded_at) {
+    const recordedAt = (reading as Record<string, unknown>).recorded_at;
     if (typeof recordedAt === 'string') {
       const date = new Date(recordedAt);
       if (!isNaN(date.getTime())) {
@@ -288,7 +288,7 @@ export function extractTimestamp(reading: SensorReading | any): number {
   }
   
   // Try flat structure (timestamp_ms directly on reading)
-  const flatTimestampMs = (reading as any).timestamp_ms;
+  const flatTimestampMs = (reading as Record<string, unknown>).timestamp_ms;
   if (flatTimestampMs !== undefined && flatTimestampMs !== null) {
     if (typeof flatTimestampMs === 'number') return flatTimestampMs;
     if (typeof flatTimestampMs === 'string') {
@@ -299,7 +299,7 @@ export function extractTimestamp(reading: SensorReading | any): number {
   
   // Try nested structure (timestamp_ms in reading_value)
   if (reading.reading_value && typeof reading.reading_value === 'object') {
-    const timestampMs = reading.reading_value.timestamp_ms;
+    const timestampMs = (reading.reading_value as Record<string, unknown>).timestamp_ms;
     if (timestampMs !== undefined && timestampMs !== null) {
       if (typeof timestampMs === 'number') return timestampMs;
       if (typeof timestampMs === 'string') {
@@ -311,7 +311,7 @@ export function extractTimestamp(reading: SensorReading | any): number {
   
   // Fallback to created_at converted to milliseconds
   if (reading.created_at) {
-    return new Date(reading.created_at).getTime();
+    return new Date(reading.created_at as string | number | Date).getTime();
   }
   
   return Date.now();
@@ -435,7 +435,7 @@ export function formatMetricValue(
 
 // Process readings into time series data
 export function processReadingsToTimeSeries(
-  readings: SensorReading[] | any[],
+  readings: SensorReading[] | Record<string, unknown>[],
   valueKey: string,
   keys: string[]
 ): Array<{ time: string; value: number | null }> {

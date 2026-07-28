@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { AdminRouteGuard } from "@/components/AdminRouteGuard";
 import { AppShell } from "@/components/layout/AppShell";
 import { LoadingState } from "@/components/ui/loading-state";
@@ -152,11 +151,12 @@ export default function AdminDashboard() {
 
   const refreshUser = useAuthStore((state) => state.refreshUser);
   const { pending: pendingRequests } = useWaitlistNotifications();
-  const router = useRouter();
+  
 
   useEffect(() => {
     setSelectedDevices(new Set());
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const fetchData = async () => {
@@ -178,8 +178,8 @@ export default function AdminDashboard() {
         setLocations(locationsData);
         setSelectedDevices(new Set());
       }
-    } catch (err: any) {
-      setError(err.message || "Failed to fetch data");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to fetch data");
       console.error("Error fetching data:", err);
     } finally {
       setLoading(false);
@@ -193,8 +193,8 @@ export default function AdminDashboard() {
       setUserDialogOpen(false);
       resetUserForm();
       fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to create user");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to create user");
     }
   };
 
@@ -212,8 +212,8 @@ export default function AdminDashboard() {
       resetUserForm();
       fetchData();
       await refreshUser();
-    } catch (err: any) {
-      setError(err.message || "Failed to update user");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to update user");
     }
   };
 
@@ -223,8 +223,8 @@ export default function AdminDashboard() {
       await deleteUser(userId);
       fetchData();
       await refreshUser();
-    } catch (err: any) {
-      setError(err.message || "Failed to delete user");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to delete user");
     }
   };
 
@@ -236,8 +236,8 @@ export default function AdminDashboard() {
       setResetPasswordUserId("");
       setNewPassword("");
       alert("Password reset successfully");
-    } catch (err: any) {
-      setError(err.message || "Failed to reset password");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to reset password");
     }
   };
 
@@ -273,8 +273,8 @@ export default function AdminDashboard() {
       setLocationDialogOpen(false);
       resetLocationForm();
       fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to create location");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to create location");
     }
   };
 
@@ -292,8 +292,8 @@ export default function AdminDashboard() {
       setEditingLocation(null);
       resetLocationForm();
       fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to update location");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to update location");
     }
   };
 
@@ -310,7 +310,7 @@ export default function AdminDashboard() {
         setLocationDeleteConflict(conflict);
         setLocationDeleteConfirmOpen(true);
       } else {
-        setError(err instanceof Error ? err.message : "Failed to delete location");
+        setError(err instanceof Error ? (err as Error).message : "Failed to delete location");
       }
     } finally {
       setLocationDeleteLoading(false);
@@ -328,7 +328,7 @@ export default function AdminDashboard() {
       setLocationDeleteConflict(null);
       fetchData();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to delete location");
+      setError(err instanceof Error ? (err as Error).message : "Failed to delete location");
     } finally {
       setLocationDeleteLoading(false);
     }
@@ -379,8 +379,8 @@ export default function AdminDashboard() {
       setDeviceIdCopied(false);
       setApiKeyDialogOpen(true);
       fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to create device");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to create device");
     }
   };
 
@@ -399,8 +399,8 @@ export default function AdminDashboard() {
       setEditingDevice(null);
       resetDeviceForm();
       fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to update device");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to update device");
     }
   };
 
@@ -409,8 +409,8 @@ export default function AdminDashboard() {
     try {
       await deleteSensorDevice(deviceId);
       fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to delete device");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to delete device");
     }
   };
 
@@ -435,7 +435,7 @@ export default function AdminDashboard() {
       setDeviceIdCopied(false);
       setApiKeyDialogOpen(true);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to regenerate API key");
+      setError(err instanceof Error ? (err as Error).message : "Failed to regenerate API key");
     } finally {
       setRegeneratingDeviceId(null);
     }
@@ -484,8 +484,8 @@ export default function AdminDashboard() {
     try {
       await updateDeviceApproval(deviceId, "approved");
       await fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to approve device");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to approve device");
     }
   };
 
@@ -495,8 +495,8 @@ export default function AdminDashboard() {
     try {
       await updateDeviceApproval(deviceId, "rejected");
       await fetchData();
-    } catch (err: any) {
-      setError(err.message || "Failed to reject device");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Failed to reject device");
     }
   };
 
@@ -512,8 +512,8 @@ export default function AdminDashboard() {
       await bulkUpdateSensorDevices(updates);
       setSelectedDevices(new Set());
       await fetchData();
-    } catch (err: any) {
-      setError(err.message || "Bulk approval failed");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Bulk approval failed");
     } finally {
       setBulkLoading(false);
     }
@@ -532,8 +532,8 @@ export default function AdminDashboard() {
       await bulkUpdateSensorDevices(updates);
       setSelectedDevices(new Set());
       await fetchData();
-    } catch (err: any) {
-      setError(err.message || "Bulk rejection failed");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Bulk rejection failed");
     } finally {
       setBulkLoading(false);
     }
@@ -552,8 +552,8 @@ export default function AdminDashboard() {
       setSelectedDevices(new Set());
       setBulkStatusDialogOpen(false);
       await fetchData();
-    } catch (err: any) {
-      setError(err.message || "Bulk status update failed");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Bulk status update failed");
     } finally {
       setBulkLoading(false);
     }
@@ -572,8 +572,8 @@ export default function AdminDashboard() {
       setSelectedDevices(new Set());
       setBulkLocationDialogOpen(false);
       await fetchData();
-    } catch (err: any) {
-      setError(err.message || "Bulk location update failed");
+    } catch (err: unknown) {
+      setError((err as Error).message || "Bulk location update failed");
     } finally {
       setBulkLoading(false);
     }

@@ -24,7 +24,7 @@ import { evaluateAqi } from "@/lib/utils/aqi-standards";
 import { useAqiStandard } from "@/lib/preferences";
 import { getPublicStats } from "@/lib/api/stats";
 import type { PublicStats } from "@/lib/api/types";
-import { WeatherMark } from "@/components/WeatherMark";
+
 import { LoadingState } from "@/components/ui/loading-state";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 
@@ -43,7 +43,7 @@ const Map = dynamic(() => import("@/components/Map").then((mod) => ({ default: m
   ),
 });
 
-interface Station extends MapStation {}
+type Station = MapStation;
 
 // Stations will be loaded from API
 
@@ -111,13 +111,14 @@ function FadeInOnScroll({ children, delay = 0 }: { children: React.ReactNode; de
       { threshold: 0.1 }
     );
 
-    if (ref.current) {
-      observer.observe(ref.current);
+    const currentRef = ref.current;
+    if (currentRef) {
+      observer.observe(currentRef);
     }
 
     return () => {
-      if (ref.current) {
-        observer.unobserve(ref.current);
+      if (currentRef) {
+        observer.unobserve(currentRef);
       }
     };
   }, [delay]);
@@ -629,7 +630,21 @@ export default function LandingPage() {
             </div>
             <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-300 hover:shadow-lg">
               <div className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">
-                <AnimatedCounter end={99} suffix="%" />
+                {/*
+                  Data confidence is substantiated as the percentage of active stations 
+                  reporting data (i.e. not 'Offline' or 'No Data'). 
+                  If no stations are loaded yet, we show a loading state or default to 99%.
+                */}
+                {stationsLoading ? (
+                  <span className="text-base">Loading…</span>
+                ) : (
+                  <AnimatedCounter 
+                    end={stations.length > 0 
+                      ? Math.round((stations.filter(s => s.lastSeenAt !== null).length / stations.length) * 100) 
+                      : 99} 
+                    suffix="%" 
+                  />
+                )}
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400">Data confidence</div>
             </div>

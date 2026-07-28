@@ -18,7 +18,8 @@ export type { PublicReadingKPI, MapKPIReading };
 export async function getSensorReadings(params?: SensorReadingsParams & { requireAuth?: boolean }): Promise<SensorReading[]> {
   // Extract requireAuth before building query params
   const requireAuth = params?.requireAuth !== undefined ? params.requireAuth : true;
-  const { requireAuth: _, ...filterParams } = params || {};
+  const filterParams = { ...params };
+  delete filterParams.requireAuth;
   
   const queryParams = new URLSearchParams();
   

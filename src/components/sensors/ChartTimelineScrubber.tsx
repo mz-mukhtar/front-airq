@@ -218,6 +218,7 @@ export function ChartTimelineScrubber({
         aria-label="Chart timeline"
         aria-valuemin={minTs}
         aria-valuemax={maxTs}
+        aria-valuenow={start}
         className={`relative h-10 rounded-md bg-muted/60 touch-none select-none ${
           disabled ? "opacity-50 pointer-events-none" : "cursor-pointer"
         }`}
