@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ProfileButton } from "@/components/ProfileButton";
-import { MapPin, Thermometer, Droplets, BarChart3, ArrowRight, Activity, Sparkles, TrendingUp, Shield, Zap, Globe, Users, ImageIcon, Cpu } from "lucide-react";
+import { MapPin, Thermometer, Droplets, BarChart3, ArrowRight, Activity, Sparkles, TrendingUp, Shield, Zap, Globe, Users, ImageIcon, Cpu, Menu } from "lucide-react";
 import {
   fetchPublicDashboardData,
   getAirQualityLevelBadgeClass,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/utils/readings";
 import { WeatherMark } from "@/components/WeatherMark";
 import { LoadingState } from "@/components/ui/loading-state";
+import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 
 // Dynamically import Map to avoid SSR issues with Leaflet
 const Map = dynamic(() => import("@/components/Map").then((mod) => ({ default: mod.Map })), {
@@ -170,6 +172,7 @@ export default function LandingPage() {
   const [solidworksModalOpen, setSolidworksModalOpen] = useState(false);
   const [heroMediaMode, setHeroMediaMode] = useState<"video" | "slideshow">("video");
   const [heroMediaSlide, setHeroMediaSlide] = useState(0);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const heroMediaSlides = [
     { src: "/photo_2026-03-16_22-45-38.jpg", label: "PCB stack & routing" },
@@ -184,11 +187,10 @@ export default function LandingPage() {
         setStationsLoading(true);
         const { stations: stationsData } = await fetchPublicDashboardData();
         setStations(stationsData);
+        setStationsLoading(false);
       } catch (error) {
         console.error("Error fetching stations:", error);
         // Keep empty array on error - will show loading state
-      } finally {
-        setStationsLoading(false);
       }
     };
 
@@ -292,15 +294,37 @@ export default function LandingPage() {
                   >
                     Login
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => router.push("/login")}
-                    className="hidden sm:inline-flex border-accent text-accent hover:bg-accent hover:text-accent-foreground transition-all duration-300 hover:scale-105"
-                  >
-                    Dashboard
-                  </Button>
                 </>
               )}
+              
+              {/* Mobile Navigation */}
+              <div className="md:hidden flex items-center ml-1">
+                <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
+                  <SheetTrigger asChild>
+                    <Button variant="ghost" size="icon" className="text-primary hover:bg-slate-100">
+                      <Menu className="h-6 w-6" />
+                      <span className="sr-only">Toggle mobile menu</span>
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent side="right" className="w-[280px] sm:w-[350px] bg-background/95 backdrop-blur-md">
+                    <SheetTitle className="sr-only">Navigation Menu</SheetTitle>
+                    <nav className="flex flex-col gap-6 mt-10">
+                      {["map", "sensors", "data", "hardware", "photos", "team"].map((section) => (
+                        <button
+                          key={section}
+                          onClick={() => {
+                            setIsMobileMenuOpen(false);
+                            setTimeout(() => scrollToId(section), 100);
+                          }}
+                          className="text-left text-lg font-semibold uppercase tracking-[0.18em] text-primary hover:text-accent transition-colors"
+                        >
+                          {section}
+                        </button>
+                      ))}
+                    </nav>
+                  </SheetContent>
+                </Sheet>
+              </div>
             </div>
           </div>
         </div>
@@ -375,22 +399,16 @@ export default function LandingPage() {
                         size="lg"
                         className="bg-purple-600 text-white hover:bg-purple-700 shadow-2xl shadow-black/30 h-12 px-6"
                       >
-                        Get started
+                        {isAuthenticated ? "Go to Dashboard" : "Log in to Dashboard"}
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Button>
                       <Button
-                        onClick={() => {
-                          if (isAuthenticated) {
-                            router.push("/dashboard");
-                          } else {
-                            router.push("/login");
-                          }
-                        }}
+                        onClick={() => scrollToId("map")}
                         variant="outline"
                         size="lg"
                         className="h-12 px-6 bg-transparent hover:bg-transparent border-purple-200/80 text-purple-200 font-extrabold tracking-wide hover:text-purple-100 hover:border-purple-200"
                       >
-                        View dashboard
+                        Explore Map
                       </Button>
                     </div>
                   </div>
@@ -1215,9 +1233,9 @@ export default function LandingPage() {
                     </button>
                   </li>
                   <li>
-                    <a href="/dashboard" className="hover:text-slate-900 transition-colors">
+                    <Link href="/dashboard" className="hover:text-slate-900 transition-colors">
                       Dashboard
-                    </a>
+                    </Link>
                   </li>
                 </ul>
               </div>
