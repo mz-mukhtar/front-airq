@@ -301,27 +301,82 @@ export default function LandingPage() {
               <div className="md:hidden flex items-center ml-1">
                 <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
                   <SheetTrigger asChild>
-                    <Button variant="ghost" size="icon" className="text-primary hover:bg-slate-100">
+                    <Button variant="ghost" size="icon" className="text-primary hover:bg-slate-100 rounded-lg">
                       <Menu className="h-6 w-6" />
                       <span className="sr-only">Toggle mobile menu</span>
                     </Button>
                   </SheetTrigger>
-                  <SheetContent side="right" className="w-[280px] sm:w-[350px] bg-background/95 backdrop-blur-md">
+                  <SheetContent
+                    side="right"
+                    className="w-[300px] sm:w-[360px] bg-white border-l border-slate-200 p-0 flex flex-col"
+                  >
                     <SheetTitle className="sr-only">Navigation Menu</SheetTitle>
-                    <nav className="flex flex-col gap-6 mt-10">
-                      {["map", "sensors", "data", "hardware", "photos", "team"].map((section) => (
+
+                    {/* Drawer header with branding */}
+                    <div className="flex items-center gap-3 px-6 py-5 border-b border-slate-100">
+                      <div className="p-2 rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
+                        <Activity className="h-5 w-5 text-slate-800" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-900 leading-tight">Air Quality Monitor</p>
+                        <p className="text-[11px] text-slate-400 leading-tight">Addis Ababa</p>
+                      </div>
+                    </div>
+
+                    {/* Navigation links */}
+                    <nav className="flex-1 overflow-y-auto px-4 py-4">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400 px-2 mb-3">
+                        Sections
+                      </p>
+                      {[
+                        { id: "map",      label: "Map",      icon: Globe,      desc: "Live air quality map" },
+                        { id: "sensors",  label: "Sensors",  icon: Zap,        desc: "Monitoring stations" },
+                        { id: "data",     label: "Data",     icon: BarChart3,  desc: "Air quality metrics" },
+                        { id: "hardware", label: "Hardware", icon: Cpu,        desc: "PCB & enclosure design" },
+                        { id: "photos",   label: "Photos",   icon: ImageIcon,  desc: "Field deployment shots" },
+                        { id: "team",     label: "Team",     icon: Users,      desc: "The people behind it" },
+                      ].map(({ id, label, icon: Icon, desc }) => (
                         <button
-                          key={section}
+                          key={id}
                           onClick={() => {
                             setIsMobileMenuOpen(false);
-                            setTimeout(() => scrollToId(section), 100);
+                            // Wait for Radix sheet close animation (300ms) to finish before scrolling
+                            setTimeout(() => scrollToId(id), 350);
                           }}
-                          className="text-left text-lg font-semibold uppercase tracking-[0.18em] text-primary hover:text-accent transition-colors"
+                          className="w-full flex items-center gap-4 px-3 py-3 rounded-xl text-left group hover:bg-slate-50 active:bg-slate-100 transition-colors mb-1"
                         >
-                          {section}
+                          <div className="flex-shrink-0 h-9 w-9 rounded-lg bg-slate-100 group-hover:bg-slate-200 flex items-center justify-center transition-colors">
+                            <Icon className="h-4 w-4 text-slate-600 group-hover:text-slate-900 transition-colors" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900">{label}</p>
+                            <p className="text-xs text-slate-400 truncate">{desc}</p>
+                          </div>
+                          <ArrowRight className="ml-auto h-4 w-4 text-slate-300 group-hover:text-slate-500 flex-shrink-0 transition-colors" />
                         </button>
                       ))}
                     </nav>
+
+                    {/* Bottom CTA */}
+                    <div className="px-4 py-5 border-t border-slate-100">
+                      {isAuthenticated ? (
+                        <Button
+                          onClick={() => { setIsMobileMenuOpen(false); router.push("/dashboard"); }}
+                          className="w-full bg-slate-900 text-white hover:bg-slate-800"
+                        >
+                          Go to Dashboard
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                      ) : (
+                        <Button
+                          onClick={() => { setIsMobileMenuOpen(false); router.push("/login"); }}
+                          className="w-full bg-slate-900 text-white hover:bg-slate-800"
+                        >
+                          Log in
+                          <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                   </SheetContent>
                 </Sheet>
               </div>
