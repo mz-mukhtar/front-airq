@@ -6,7 +6,6 @@ import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import dynamic from "next/dynamic";
 import Image from "next/image";
-import Link from "next/link";
 import { SensorHousingVideo } from "@/components/landing/SensorHousingVideo";
 import { PhotoGallery } from "@/components/landing/PhotoGallery";
 import { FIELD_PHOTOS, LAB_PHOTOS } from "@/components/landing/photo-data";
@@ -15,15 +14,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { ProfileButton } from "@/components/ProfileButton";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AtmosphereBackdrop } from "@/components/AtmosphereBackdrop";
-import { MapPin, Thermometer, Droplets, BarChart3, ArrowRight, Activity, Sparkles, TrendingUp, Shield, Zap, Globe, Users, ImageIcon, Cpu } from "lucide-react";
+import { MapPin, Thermometer, Droplets, BarChart3, ArrowRight, Activity, Sparkles, TrendingUp, Shield, Zap, Globe, Users, ImageIcon, Cpu, Menu } from "lucide-react";
 import {
   fetchPublicDashboardData,
-<<<<<<< HEAD
   formatMetricValue,
-=======
-  normalizeAirQualityLevel,
-  calculateAQI,
->>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
   type MapStation,
 } from "@/lib/utils/readings";
 import { evaluateAqi } from "@/lib/utils/aqi-standards";
@@ -53,30 +47,7 @@ interface Station extends MapStation {}
 
 // Stations will be loaded from API
 
-<<<<<<< HEAD
-=======
-// Status badge colors from backend air_quality_level
-const getStatusColor = (status: string) => {
-  const level = normalizeAirQualityLevel(status);
-  switch (level) {
-    case "Good":
-      return "bg-green-100 text-green-800 border-green-300";
-    case "Moderate":
-      return "bg-yellow-100 text-yellow-800 border-yellow-300";
-    case "Unhealthy for Sensitive Groups":
-      return "bg-orange-100 text-orange-800 border-orange-300";
-    case "Unhealthy":
-      return "bg-red-100 text-red-800 border-red-300";
-    case "Very Unhealthy":
-      return "bg-purple-100 text-purple-800 border-purple-300";
-    case "Hazardous":
-      return "bg-purple-200 text-purple-900 border-purple-400";
-    default:
-      return "bg-gray-100 text-gray-800 border-gray-300";
-  }
-};
 
->>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
 // Animated Counter Component
 function AnimatedCounter({ end, duration = 2000, suffix = "" }: { end: number; duration?: number; suffix?: string }) {
   const [count, setCount] = useState(0);
@@ -494,19 +465,11 @@ export default function LandingPage() {
                       Monitor air quality across{" "}
                       <span className="font-semibold text-white">Addis Ababa</span> with real‑time data from{" "}
                       <span className="font-bold text-white">
-<<<<<<< HEAD
                         {stationsLoading && !publicStats ? (
-                          "0+"
-                        ) : (
-                          <>
-                            <AnimatedCounter end={publicStats?.stations ?? stations.length} suffix="+" />{" "}
-=======
-                        {stationsLoading ? (
                           "0"
                         ) : (
                           <>
-                            <AnimatedCounter end={stations.length} />{" "}
->>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
+                            <AnimatedCounter end={publicStats?.stations ?? stations.length} />{" "}
                           </>
                         )}
                       </span>{" "}
@@ -645,15 +608,9 @@ export default function LandingPage() {
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400">Real‑time monitoring</div>
             </div>
-<<<<<<< HEAD
             <div className="p-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-900/70 dark:hover:border-slate-100/40 transition-all duration-300 hover:shadow-lg">
               <div className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-slate-100 mb-1">
-                {stationsLoading && !publicStats ? <span className="text-base">Loading…</span> : <AnimatedCounter end={publicStats?.stations ?? stations.length} suffix="+" />}
-=======
-            <div className="p-5 rounded-xl bg-white border border-slate-200 hover:border-slate-900/70 transition-all duration-300 hover:shadow-lg">
-              <div className="text-2xl md:text-3xl font-bold text-slate-900 mb-1">
-                {stationsLoading ? <span className="text-base">Loading…</span> : <AnimatedCounter end={stations.length} />}
->>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
+                {stationsLoading && !publicStats ? <span className="text-base">Loading…</span> : <AnimatedCounter end={publicStats?.stations ?? stations.length} />}
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400">Monitoring stations</div>
             </div>
@@ -925,23 +882,13 @@ export default function LandingPage() {
                               {aqi.category?.shortLabel ?? aqi.label}
                             </span>
                           </div>
-<<<<<<< HEAD
                           <CardDescription
                             className="text-sm text-slate-600 dark:text-slate-400"
                             title={`${standard.attribution} ${standard.methodology}`}
                           >
-                            Air quality:{" "}
-                            <span className="font-semibold text-slate-900 dark:text-slate-100">{aqi.label}</span>
-                            {" · "}
                             {standard.shortName}{" "}
                             <span className="font-semibold text-slate-900 dark:text-slate-100 text-lg">
                               {aqi.display}
-=======
-                          <CardDescription className="text-sm text-slate-600">
-                            AQI{" "}
-                            <span className="font-semibold text-slate-900 text-lg">
-                              {station.aqi}
->>>>>>> c32dc14 (feat: refactor air quality status color mapping and improve animated counter display)
                             </span>
                           </CardDescription>
                         </CardHeader>
@@ -1390,7 +1337,7 @@ export default function LandingPage() {
                   <li>
                     <a href="/dashboard" className="hover:text-slate-900 dark:hover:text-slate-100 transition-colors">
                       Dashboard
-                    </Link>
+                    </a>
                   </li>
                 </ul>
               </div>
